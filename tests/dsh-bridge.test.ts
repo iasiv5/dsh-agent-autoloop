@@ -257,8 +257,8 @@ test("the pause gate stops claiming and resuming the gate dispatches again", asy
   const s = setup();
   try {
     s.bridge.start();
-    s.hub.ingest("local", { id: "e1", type: "demo.start", subject: "s1" });
     s.bridge.setPaused(true);
+    s.hub.ingest("local", { id: "e1", type: "demo.start", subject: "s1" });
     const held = await s.dispatchAndWait();
     assert.equal(held.length, 0, "paused bridge claims nothing");
     s.bridge.setPaused(false);

@@ -227,6 +227,9 @@ export function dashboardRoutes(io: DashboardIo): Route[] {
           return reply(res, 400, { ok: false, error: String((error as Error).message) });
         }
         try {
+          // parseRules appends the kernel-managed "schedule" source after validating; a GET round-trip carries it
+          // back, so the editor's PUT strips it before re-validating (the kernel re-adds it itself).
+          if (checked.sources && typeof checked.sources === "object") delete checked.sources.schedule;
           const rules = checkRules(
             JSON.stringify(checked),
             Date.now(),

@@ -3,7 +3,17 @@
 // directory (old shell, harness packages) before the bridge exists.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -317,6 +327,40 @@ test("config defaults to two concurrent matters under worker dsh, validates rule
     writeFileSync(join(dir, "config.json"), `{"rules":{"broken":1}}`);
     assert.throws(() => readConfig(dir), /不合格/);
   } finally {
+    clean();
+  }
+});
+
+test("a symlink-style install resolves to the profile that links this package", () => {
+  const { make, clean } = scratch();
+  const savedHome = process.env.DSH_HOME;
+  const savedArgv = process.argv;
+  try {
+    const home = make();
+    // 两个 profile 共存：linkA 指向本插件（实体目录在别处），linkB 指向无关目录——精确 link 匹配应选中 linkA。
+    for (const name of ["web", "other"]) {
+      const profile = join(home, "profiles", name);
+      mkdirSync(join(profile, "node_modules", "@iasiv5"), { recursive: true });
+      writeFileSync(join(profile, "package.json"), JSON.stringify({ dsh: { profile: { bundles: [] } } }));
+    }
+    symlinkSync(
+      join(import.meta.dirname, "..", "dsh"),
+      join(home, "profiles", "web", "node_modules", "@iasiv5", "dsh-agent-autoloop"),
+    );
+    symlinkSync(
+      join(home, "elsewhere"),
+      join(home, "profiles", "other", "node_modules", "@iasiv5", "dsh-agent-autoloop"),
+    );
+    process.env.DSH_HOME = home;
+    process.argv = ["dsh", "web"];
+    delete process.env.AGENT_AUTOLOOP_DSH_DATA;
+    const dir = paths.dataDir();
+    assert.equal(dir, join(home, "profiles", "web", "data", "agent-autoloop"));
+  } finally {
+    if (savedHome === undefined) delete process.env.DSH_HOME;
+    else process.env.DSH_HOME = savedHome;
+    process.argv = savedArgv;
+    delete process.env.AGENT_AUTOLOOP_DSH_DATA;
     clean();
   }
 });

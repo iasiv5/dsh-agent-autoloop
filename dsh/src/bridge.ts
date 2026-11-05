@@ -15,6 +15,7 @@ export type BridgeAgentHandle = {
     send(message: unknown, target?: string, wakeup?: boolean): unknown;
     cancel(cause?: string): unknown;
   };
+  dispose(): Promise<void> | void;
 };
 
 export type SessionEventLike = { type: string; data: any };
@@ -90,6 +91,7 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
   let stopped = false;
   let paused = false;
   let unsubscribe: (() => void) | undefined;
+  let unsubscribeHub: (() => void) | undefined;
   let armDisposer: (() => void) | undefined;
 
   /** One bridge beat: hand in what ended (via events), keep the lease, take on more work. */
@@ -103,14 +105,17 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
     arm();
   }
 
-  /** Arm the single earliest kernel deadline; firing it ticks the hub and takes more work. */
+  /** Arm the single earliest kernel deadline; firing it ticks the hub and takes more work. While runs are held, the
+   * next beat never sits further out than the heartbeat floor — the kernel's lease (WORKER_FRESH/RUN_LEASE) assumes a
+   * live worker keeps saying so. */
   function arm() {
     armDisposer?.();
     if (stopped) return;
     const due = hub.one<{ at: number }>(
       "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'",
     );
-    const ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1000), 2147483647);
+    let ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1000), 2147483647);
+    if (entries.size) ms = Math.min(ms, 2 * 60_000);
     armDisposer = world.schedule(ms, () => {
       hub.tick();
       beat();
@@ -245,11 +250,23 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
     }
     if (kind === "aborted") {
       hub.finish(run, token, { outcome: "cancelled", summary: "已停止", session: entry.sessionId });
+      void retire(entry);
       forget(entry);
       return;
     }
     hub.finish(run, token, { outcome: "failed", error: describeReason(data.reason), session: entry.sessionId });
+    void retire(entry);
     forget(entry);
+  }
+
+  /** A failed or cancelled turn ends a poisoned session: retire it so the retry falls back to a fresh session that
+   * picks up the current trusted options, instead of resurrecting the exact context that just failed. */
+  async function retire(entry: Entry) {
+    try {
+      await entry.handle?.dispose();
+    } catch {
+      // Already gone with the unloading scope.
+    }
   }
 
   function forget(entry: Entry) {
@@ -325,6 +342,8 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
     stopped = true;
     unsubscribe?.();
     unsubscribe = undefined;
+    unsubscribeHub?.();
+    unsubscribeHub = undefined;
     armDisposer?.();
     armDisposer = undefined;
     entries.clear();
@@ -335,6 +354,13 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
     /** Wire the world: subscribe session events, take over orphaned runs, arm the deadline timer, first dispatch. */
     start() {
       unsubscribe = world.onSessionEvent(onSessionEvent);
+      // Facts committed by this process (dashboard routes, commands) must wake dispatch immediately, not at the next
+      // deadline; the kernel facade's onChange fires once per committed fact.
+      unsubscribeHub = hub.onChange(() => {
+        if (stopped) return;
+        dispatch();
+        arm();
+      });
       void takeOver().finally(() => beat());
       beat();
     },

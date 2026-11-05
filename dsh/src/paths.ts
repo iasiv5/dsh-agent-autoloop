@@ -5,7 +5,16 @@
 // or the single profile there is when argv doesn't say. link: installs resolve import.meta.url outside the profile,
 // hence the last two steps. The env var is read per call, not at import, so one test process can own several
 // instances.
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -31,6 +40,41 @@ function profileFromModule(): string | undefined {
   }
 }
 
+const PACKAGE_NAME = "@iasiv5/dsh-agent-autoloop";
+
+function installRoot(): string | undefined {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (;;) {
+    if (existsSync(join(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
+}
+
+/** The profile whose node_modules links to (or contains) this very package — exact for symlink installs too, where
+ * Node hands us the realpath outside the profile. Falls through when nothing matches. */
+function profileByLink(home: string): string | undefined {
+  const root = installRoot();
+  if (!root) return undefined;
+  let here: string;
+  try {
+    here = realpathSync(root);
+  } catch {
+    return undefined;
+  }
+  for (const name of readdirSync(join(home, "profiles"))) {
+    const installed = join(home, "profiles", name, "node_modules", PACKAGE_NAME);
+    if (!existsSync(installed)) continue;
+    try {
+      if (realpathSync(installed) === here) return join(home, "profiles", name);
+    } catch {
+      // A dangling link is not this plugin.
+    }
+  }
+  return undefined;
+}
+
 function profileNameFromArgv(): string | undefined {
   const argv = process.argv;
   const flag = argv.indexOf("--profile");
@@ -43,6 +87,8 @@ function profileFromHome(): string | undefined {
   if (!existsSync(profiles)) return undefined;
   const name = profileNameFromArgv();
   if (name) return isProfileRoot(join(profiles, name)) ? join(profiles, name) : undefined;
+  const byLink = profileByLink(home);
+  if (byLink) return byLink;
   const known = readdirSync(profiles).filter((entry) => isProfileRoot(join(profiles, entry)));
   return known.length === 1 ? join(profiles, known[0]) : undefined;
 }

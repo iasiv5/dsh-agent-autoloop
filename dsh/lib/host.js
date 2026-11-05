@@ -1611,7 +1611,7 @@ function createHub(options) {
 // src/config.ts
 import { readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
-var FIELDS2 = ["capacity", "worker", "rules", "publicUrl"];
+var FIELDS2 = ["capacity", "worker", "rules", "publicUrl", "approvalPolicy"];
 var DEFAULTS2 = { capacity: 2, worker: "dsh" };
 function readConfig(dir) {
   let given = {};
@@ -1636,6 +1636,10 @@ function readConfig(dir) {
   }
   const publicUrl = given_.publicUrl;
   if (publicUrl !== void 0 && typeof publicUrl !== "string") throw new Error("publicUrl \u8981\u662F\u6587\u5B57");
+  const approvalPolicy = given_.approvalPolicy;
+  if (approvalPolicy !== void 0 && approvalPolicy !== "ask" && approvalPolicy !== "never") {
+    throw new Error('approvalPolicy \u53EA\u80FD\u662F "ask" \u6216 "never"\uFF08\u7F3A\u7701=\u5BBF\u4E3B\u90E8\u7F72\u9ED8\u8BA4\uFF09');
+  }
   let rules;
   if (given_.rules !== void 0) {
     try {
@@ -1644,11 +1648,20 @@ function readConfig(dir) {
       throw new Error(`config.json \u7684 rules \u4E0D\u5408\u683C\uFF1A${error.message.split("\n")[0]}`);
     }
   }
-  return { capacity, worker, rules, publicUrl };
+  return { capacity, worker, rules, publicUrl, approvalPolicy };
 }
 
 // src/paths.ts
-import { chmodSync as chmodSync2, existsSync as existsSync2, mkdirSync as mkdirSync2, readdirSync, readFileSync as readFileSync3, unlinkSync, writeFileSync as writeFileSync2 } from "node:fs";
+import {
+  chmodSync as chmodSync2,
+  existsSync as existsSync2,
+  mkdirSync as mkdirSync2,
+  readdirSync,
+  readFileSync as readFileSync3,
+  realpathSync,
+  unlinkSync,
+  writeFileSync as writeFileSync2
+} from "node:fs";
 import { dirname, join as join3 } from "node:path";
 import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -1671,6 +1684,35 @@ function profileFromModule() {
     dir = parent;
   }
 }
+var PACKAGE_NAME = "@iasiv5/dsh-agent-autoloop";
+function installRoot() {
+  let dir = dirname(fileURLToPath(import.meta.url));
+  for (; ; ) {
+    if (existsSync2(join3(dir, "package.json"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return void 0;
+    dir = parent;
+  }
+}
+function profileByLink(home) {
+  const root = installRoot();
+  if (!root) return void 0;
+  let here;
+  try {
+    here = realpathSync(root);
+  } catch {
+    return void 0;
+  }
+  for (const name2 of readdirSync(join3(home, "profiles"))) {
+    const installed = join3(home, "profiles", name2, "node_modules", PACKAGE_NAME);
+    if (!existsSync2(installed)) continue;
+    try {
+      if (realpathSync(installed) === here) return join3(home, "profiles", name2);
+    } catch {
+    }
+  }
+  return void 0;
+}
 function profileNameFromArgv() {
   const argv = process.argv;
   const flag = argv.indexOf("--profile");
@@ -1682,6 +1724,8 @@ function profileFromHome() {
   if (!existsSync2(profiles)) return void 0;
   const name2 = profileNameFromArgv();
   if (name2) return isProfileRoot(join3(profiles, name2)) ? join3(profiles, name2) : void 0;
+  const byLink = profileByLink(home);
+  if (byLink) return byLink;
   const known = readdirSync(profiles).filter((entry) => isProfileRoot(join3(profiles, entry)));
   return known.length === 1 ? join3(profiles, known[0]) : void 0;
 }
@@ -1842,6 +1886,7 @@ var textOf = (message) => {
   return Array.isArray(blocks) ? blocks.filter((block) => block?.type === "text").map((block) => block.text).join("") : typeof blocks === "string" ? blocks : "";
 };
 var claimId = () => `dsh-${Math.random().toString(36).slice(2)}`;
+var timeoutMs = (job) => Math.max(1, job.agent.timeout ?? 180) * 6e4;
 var kindOf = (reason) => {
   if (typeof reason === "string") return reason;
   if (reason && typeof reason === "object") {
@@ -1860,6 +1905,7 @@ function createBridge(hub, world, options) {
   let stopped = false;
   let paused = false;
   let unsubscribe;
+  let unsubscribeHub;
   let armDisposer;
   function beat() {
     if (stopped) return;
@@ -1876,7 +1922,8 @@ function createBridge(hub, world, options) {
     const due = hub.one(
       "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'"
     );
-    const ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1e3), 2147483647);
+    let ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1e3), 2147483647);
+    if (entries.size) ms = Math.min(ms, 2 * 6e4);
     armDisposer = world.schedule(ms, () => {
       hub.tick();
       beat();
@@ -1901,7 +1948,10 @@ function createBridge(hub, world, options) {
       turn: void 0,
       lastText: void 0,
       repairs: 0,
-      settling: false
+      settling: false,
+      usage: void 0,
+      watchdog: void 0,
+      timedOut: void 0
     };
     entries.set(job.run, entry);
     bySession.set(planned, job.run);
@@ -1927,6 +1977,11 @@ function createBridge(hub, world, options) {
         }
       }
       await entry.handle.agent.send(world.userMessage(prompt), "next-turn", true);
+      entry.watchdog = world.schedule(timeoutMs(job), () => {
+        world.log(`run ${job.run}: watchdog fired (${timeoutMs(job) / 6e4}min); stopping the turn`);
+        entry.timedOut = true;
+        entry.handle?.agent.cancel("timeout");
+      });
       world.log(`run ${job.run} (${job.rule.name}) dispatched as ${entry.sessionId}`);
     } catch (error) {
       world.log(`run ${job.run} dispatch failed: ${String(error?.message ?? error).slice(0, 300)}`);
@@ -1954,6 +2009,19 @@ function createBridge(hub, world, options) {
       return;
     }
     entry.settling = true;
+    entry.watchdog?.();
+    entry.watchdog = void 0;
+    if (entry.timedOut) {
+      const minutes = Math.round(timeoutMs(entry.job) / 6e4);
+      hub.finish(run, token, {
+        outcome: "failed",
+        error: `\u8D85\u8FC7 ${minutes} \u5206\u949F\u8FD8\u6CA1\u7ED3\u675F\uFF0C\u5DF2\u505C\u6B62`,
+        session: entry.sessionId,
+        ...entry.usage && { usage: entry.usage }
+      });
+      forget(entry);
+      return;
+    }
     if (kind === "completed") {
       const { result, problem } = resultFrom(readMessage(entry.lastText ?? ""), { session: entry.sessionId });
       if (problem && entry.repairs < 2) {
@@ -1970,20 +2038,30 @@ function createBridge(hub, world, options) {
           }
         ];
       }
-      hub.finish(run, token, { ...result, session: entry.sessionId });
+      hub.finish(run, token, { ...result, session: entry.sessionId, ...entry.usage && { usage: entry.usage } });
       world.log(`run ${run}: ${result.outcome}${problem ? `\uFF08\u56DE\u6267\u672A\u751F\u6548\uFF1A${problem}\uFF09` : ""}`);
       forget(entry);
       return;
     }
     if (kind === "aborted") {
       hub.finish(run, token, { outcome: "cancelled", summary: "\u5DF2\u505C\u6B62", session: entry.sessionId });
+      void retire(entry);
       forget(entry);
       return;
     }
     hub.finish(run, token, { outcome: "failed", error: describeReason(data.reason), session: entry.sessionId });
+    void retire(entry);
     forget(entry);
   }
+  async function retire(entry) {
+    try {
+      await entry.handle?.dispose();
+    } catch {
+    }
+  }
   function forget(entry) {
+    entry.watchdog?.();
+    entry.watchdog = void 0;
     entries.delete(entry.job.run);
     bySession.delete(entry.sessionId);
   }
@@ -1999,6 +2077,7 @@ function createBridge(hub, world, options) {
     }
     if (event.type === "assistant/message") {
       if (!event.data.interrupted) entry.lastText = textOf(event.data.message);
+      if (event.data.usage) entry.usage = addUsage(entry.usage, event.data.usage);
       return;
     }
     if (event.type === "turn/end") settle(entry, event.data);
@@ -2020,7 +2099,10 @@ function createBridge(hub, world, options) {
         turn: void 0,
         lastText: void 0,
         repairs: 0,
-        settling: false
+        settling: false,
+        usage: void 0,
+        watchdog: void 0,
+        timedOut: void 0
       };
       entries.set(run.id, entry);
       bySession.set(sessionId, run.id);
@@ -2046,6 +2128,8 @@ function createBridge(hub, world, options) {
     stopped = true;
     unsubscribe?.();
     unsubscribe = void 0;
+    unsubscribeHub?.();
+    unsubscribeHub = void 0;
     armDisposer?.();
     armDisposer = void 0;
     entries.clear();
@@ -2055,6 +2139,11 @@ function createBridge(hub, world, options) {
     /** Wire the world: subscribe session events, take over orphaned runs, arm the deadline timer, first dispatch. */
     start() {
       unsubscribe = world.onSessionEvent(onSessionEvent);
+      unsubscribeHub = hub.onChange(() => {
+        if (stopped) return;
+        dispatch();
+        arm();
+      });
       void takeOver().finally(() => beat());
       beat();
     },
@@ -2333,6 +2422,7 @@ function dashboardRoutes(io) {
           return reply(res, 400, { ok: false, error: String(error.message) });
         }
         try {
+          if (checked.sources && typeof checked.sources === "object") delete checked.sources.schedule;
           const rules = parseRules(
             JSON.stringify(checked),
             Date.now(),
@@ -2358,7 +2448,15 @@ function dashboardRoutes(io) {
 
 // src/host.ts
 var name = "agent-autoloop";
-var inject = ["webServer", "commands", "agents", "sessionPersistence", "workingDirectory", "timer"];
+var inject = [
+  "webServer",
+  "commands",
+  "agents",
+  "sessionPersistence",
+  "workingDirectory",
+  "timer",
+  "approval"
+];
 function apply(ctx) {
   ctx.effect(() => {
     const dir = dataDir();
@@ -2388,6 +2486,7 @@ function apply(ctx) {
           } : {}
         });
         await ctx.workingDirectory?.set(handle.agent, cwd);
+        if (config.approvalPolicy) ctx.approval?.setPolicy(handle.agent, config.approvalPolicy);
         return handle;
       },
       async resumeAgent(sessionId) {
