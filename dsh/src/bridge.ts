@@ -19,6 +19,9 @@ export type BridgeAgentHandle = {
 };
 
 export type SessionEventLike = { type: string; data: any };
+/** Every matter's first message opens with this tag. DSH derives a session's sidebar title from that first input, so the
+ * tag is what lets an operator find Auto-Loop sessions among the rest; the remainder of the title is DSH's own. */
+export const SESSION_TAG = "【Auto-Loop】";
 export type BridgeOptions = { worker: string; capacity: number; provider?: string };
 export type BridgeWorld = {
   /** Create a fresh agent bound to this session id; cwd comes from the rule. */
@@ -201,7 +204,7 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
           hub.started(job.run, job.token, { session: used });
         }
       }
-      await entry.handle.agent.send(world.userMessage(prompt), "next-turn", true);
+      await entry.handle.agent.send(world.userMessage(`${SESSION_TAG}${prompt}`), "next-turn", true);
       entry.watchdog = world.schedule(timeoutMs(job), () => {
         world.log(`run ${job.run}: watchdog fired (${timeoutMs(job) / 60000}min); stopping the turn`);
         entry.timedOut = true;

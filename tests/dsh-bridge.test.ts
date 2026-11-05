@@ -380,3 +380,17 @@ test("one matter costs a bounded number of claims: a commit never re-enters disp
     s.cleanup();
   }
 });
+
+test("every matter's first message opens with the Auto-Loop tag, so its session can be found in the sidebar", async () => {
+  // The sidebar title is derived from the first input; without the tag an Auto-Loop session is indistinguishable.
+  const s = setup();
+  try {
+    s.bridge.start();
+    s.hub.ingest("local", { id: "e1", type: "demo.start", subject: "s1" });
+    const held = await s.dispatchAndWait();
+    const first = s.sessions.get(held[0].sessionId)!.messages[0];
+    assert.ok(first.startsWith("【Auto-Loop】"), `first message opens with the tag, got: ${first.slice(0, 16)}`);
+  } finally {
+    s.cleanup();
+  }
+});

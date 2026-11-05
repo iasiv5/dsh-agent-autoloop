@@ -1885,6 +1885,7 @@ function resultFrom(message, extra) {
 }
 
 // src/bridge.ts
+var SESSION_TAG = "\u3010Auto-Loop\u3011";
 var textOf = (message) => {
   const blocks = message?.content;
   return Array.isArray(blocks) ? blocks.filter((block) => block?.type === "text").map((block) => block.text).join("") : typeof blocks === "string" ? blocks : "";
@@ -1997,7 +1998,7 @@ function createBridge(hub, world, options) {
           hub.started(job.run, job.token, { session: used });
         }
       }
-      await entry.handle.agent.send(world.userMessage(prompt), "next-turn", true);
+      await entry.handle.agent.send(world.userMessage(`${SESSION_TAG}${prompt}`), "next-turn", true);
       entry.watchdog = world.schedule(timeoutMs(job), () => {
         world.log(`run ${job.run}: watchdog fired (${timeoutMs(job) / 6e4}min); stopping the turn`);
         entry.timedOut = true;
