@@ -9,11 +9,12 @@ import type { Rules } from "../../kernel/rules.ts";
 export type AutoloopConfig = {
   capacity: number;
   worker: string;
+  provider?: string;
   rules?: Rules;
   publicUrl?: string;
   approvalPolicy?: "ask" | "never";
 };
-const FIELDS = ["capacity", "worker", "rules", "publicUrl", "approvalPolicy"];
+const FIELDS = ["capacity", "worker", "provider", "rules", "publicUrl", "approvalPolicy"];
 const DEFAULTS = { capacity: 2, worker: "dsh" };
 
 export function readConfig(dir: string): AutoloopConfig {
@@ -39,6 +40,10 @@ export function readConfig(dir: string): AutoloopConfig {
   }
   const publicUrl = given_.publicUrl;
   if (publicUrl !== undefined && typeof publicUrl !== "string") throw new Error("publicUrl 要是文字");
+  const provider = given_.provider;
+  if (provider !== undefined && (typeof provider !== "string" || !/^[a-z][a-z0-9-]*$/.test(provider))) {
+    throw new Error("provider 要是小写字母开头的标识符（宿主模型提供方 id）");
+  }
   const approvalPolicy = given_.approvalPolicy;
   if (approvalPolicy !== undefined && approvalPolicy !== "ask" && approvalPolicy !== "never") {
     throw new Error('approvalPolicy 只能是 "ask" 或 "never"（缺省=宿主部署默认）');
@@ -51,5 +56,5 @@ export function readConfig(dir: string): AutoloopConfig {
       throw new Error(`config.json 的 rules 不合格：${(error as Error).message.split("\n")[0]}`);
     }
   }
-  return { capacity, worker, rules, publicUrl: publicUrl as string | undefined, approvalPolicy };
+  return { capacity, worker, provider, rules, publicUrl: publicUrl as string | undefined, approvalPolicy };
 }

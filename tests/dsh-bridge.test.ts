@@ -45,9 +45,11 @@ function setup() {
     sessions.set(sessionId, api);
     return api;
   };
+  const createdOptions: { model?: string; effort?: string; provider?: string }[] = [];
   const world: BridgeWorld = {
-    async createAgent(sessionId, cwd) {
+    async createAgent(sessionId, cwd, options) {
       created.push(sessionId);
+      createdOptions.push(options ?? {});
       assert.equal(cwd, "/tmp");
       sessions.set(sessionId, sessionsApi(sessionId));
       return { agent: sessions.get(sessionId)!, dispose() {} };
@@ -81,11 +83,12 @@ function setup() {
     runsDir: join(home, "runs"),
     userMessage: (text) => ({ content: [{ type: "text", text }] }),
   };
-  const bridge = createBridge(hub, world, { worker: "dsh", capacity: 2 });
+  const bridge = createBridge(hub, world, { worker: "dsh", capacity: 2, provider: "zai-coding-cn" });
   const flush = () => new Promise((resolve) => setImmediate(resolve));
   return {
     hub,
     bridge,
+    createdOptions,
     sessions,
     created,
     resumed,
@@ -143,6 +146,7 @@ test("a manual event runs a session, applies its receipt and opens the notice ca
     assert.ok(card, "notice card opened");
     assert.equal(s.bridge.held().length, 0);
   } finally {
+    assert.equal(s.createdOptions.at(-1)?.provider, "zai-coding-cn");
     s.cleanup();
   }
 });

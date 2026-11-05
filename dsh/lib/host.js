@@ -1611,7 +1611,7 @@ function createHub(options) {
 // src/config.ts
 import { readFileSync as readFileSync2 } from "node:fs";
 import { join as join2 } from "node:path";
-var FIELDS2 = ["capacity", "worker", "rules", "publicUrl", "approvalPolicy"];
+var FIELDS2 = ["capacity", "worker", "provider", "rules", "publicUrl", "approvalPolicy"];
 var DEFAULTS2 = { capacity: 2, worker: "dsh" };
 function readConfig(dir) {
   let given = {};
@@ -1636,6 +1636,10 @@ function readConfig(dir) {
   }
   const publicUrl = given_.publicUrl;
   if (publicUrl !== void 0 && typeof publicUrl !== "string") throw new Error("publicUrl \u8981\u662F\u6587\u5B57");
+  const provider = given_.provider;
+  if (provider !== void 0 && (typeof provider !== "string" || !/^[a-z][a-z0-9-]*$/.test(provider))) {
+    throw new Error("provider \u8981\u662F\u5C0F\u5199\u5B57\u6BCD\u5F00\u5934\u7684\u6807\u8BC6\u7B26\uFF08\u5BBF\u4E3B\u6A21\u578B\u63D0\u4F9B\u65B9 id\uFF09");
+  }
   const approvalPolicy = given_.approvalPolicy;
   if (approvalPolicy !== void 0 && approvalPolicy !== "ask" && approvalPolicy !== "never") {
     throw new Error('approvalPolicy \u53EA\u80FD\u662F "ask" \u6216 "never"\uFF08\u7F3A\u7701=\u5BBF\u4E3B\u90E8\u7F72\u9ED8\u8BA4\uFF09');
@@ -1648,7 +1652,7 @@ function readConfig(dir) {
       throw new Error(`config.json \u7684 rules \u4E0D\u5408\u683C\uFF1A${error.message.split("\n")[0]}`);
     }
   }
-  return { capacity, worker, rules, publicUrl, approvalPolicy };
+  return { capacity, worker, provider, rules, publicUrl, approvalPolicy };
 }
 
 // src/paths.ts
@@ -1967,7 +1971,8 @@ function createBridge(hub, world, options) {
         const used = job.session ? fresh : planned;
         entry.handle = await world.createAgent(used, job.rule.cwd, {
           model: job.agent.model,
-          effort: job.agent.effort
+          effort: job.agent.effort,
+          provider: options.provider
         });
         if (used !== entry.sessionId) {
           bySession.delete(entry.sessionId);

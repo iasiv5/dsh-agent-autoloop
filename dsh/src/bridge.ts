@@ -19,13 +19,13 @@ export type BridgeAgentHandle = {
 };
 
 export type SessionEventLike = { type: string; data: any };
-export type BridgeOptions = { worker: string; capacity: number };
+export type BridgeOptions = { worker: string; capacity: number; provider?: string };
 export type BridgeWorld = {
   /** Create a fresh agent bound to this session id; cwd comes from the rule. */
   createAgent(
     sessionId: string,
     cwd: string,
-    options?: { model?: string; effort?: string },
+    options?: { model?: string; effort?: string; provider?: string },
   ): Promise<BridgeAgentHandle>;
   /** Open a persisted session for writing; rejects when the session was never materialized or is already live. */
   resumeAgent(sessionId: string): Promise<BridgeAgentHandle>;
@@ -166,6 +166,7 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
         entry.handle = await world.createAgent(used, job.rule.cwd, {
           model: job.agent.model,
           effort: job.agent.effort,
+          provider: options.provider,
         });
         if (used !== entry.sessionId) {
           bySession.delete(entry.sessionId);

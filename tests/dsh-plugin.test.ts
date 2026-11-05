@@ -305,6 +305,7 @@ test("config defaults to two concurrent matters under worker dsh, validates rule
     assert.deepEqual(readConfig(dir), {
       capacity: 2,
       worker: "dsh",
+      provider: undefined,
       rules: undefined,
       publicUrl: undefined,
       approvalPolicy: undefined,
