@@ -1,0 +1,5 @@
+# Mount the Agent Autoloop orchestration plugin into the profile roster.
+# The dashboard's browser half is declared separately via dsh.client (stage B).
+- insert:
+    - id: agent-autoloop
+      name: "@iasiv5/dsh-agent-autoloop"

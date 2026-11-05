@@ -1,0 +1,46 @@
+{
+  "name": "@iasiv5/dsh-agent-autoloop",
+  "version": "0.1.0",
+  "description": "Agent Autoloop as a native DeepSeek Harness orchestration plugin.",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "./lib/host.js",
+  "exports": {
+    ".": "./lib/host.js",
+    "./client": "./lib/client.js"
+  },
+  "files": [
+    "lib",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=24.9.0"
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": "^4.1.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.2-rc.1"
+  },
+  "scripts": {
+    "build": "npm run build:host && npm run build:client",
+    "build:host": "node scripts/build-host.mjs",
+    "build:client": "node scripts/build-client.mjs"
+  },
+  "devDependencies": {
+    "esbuild": "^0.25.0"
+  },
+  "dsh": {
+    "engines": {
+      "dsh": ">=0.2.2-rc.1"
+    },
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "slots"
+      ]
+    }
+  }
+}

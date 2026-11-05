@@ -221,6 +221,7 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 - [安全边界说明](SECURITY.md)
 - [参与贡献与交流](CONTRIBUTING.md)
 - [项目开发约定](AGENTS.md)
+- [DSH 原生插件](dsh/README.md)（@iasiv5/dsh-agent-autoloop：在 DeepSeek Harness 宿主内编排本内核；[审计](docs/dsh-migration-audit.md) · [宿主 API 映射](docs/dsh-api-mapping.md) · [架构决策](docs/adr/0001-dsh-native-plugin.md) · [对齐记录](docs/dsh-alignment.md) · [交付报告](docs/dsh-delivery.md)）
 
 <details>
 <summary><strong>仓库目录</strong></summary>

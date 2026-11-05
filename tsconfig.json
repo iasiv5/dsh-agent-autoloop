@@ -22,6 +22,8 @@
     "kernel",
     "protocol",
     "sim",
+    "dsh",
     "examples/recipes"
-  ]
+  ],
+  "exclude": ["dsh/lib", "dsh/node_modules"]
 }

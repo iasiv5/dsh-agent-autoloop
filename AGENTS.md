@@ -52,4 +52,14 @@
 
 现有测试是行为规格，不为迁就实现改预期。模拟、穷举、强杀和变异检查只在相关改动需要时运行，不扩写验证框架。新测试先写失败方式再写实现，不补复述实现的测试。模拟吞吐只记录观察，不作为发布门槛，不为加速模拟保留另一套内核。预算检查采用 README 和协议的口径：空闲内存与千连接内存分开，持久化写入不换成批量提交。
 
+## DSH 原生插件层（dsh/）
+
+`dsh/` 是 DeepSeek Harness 原生插件包（ADR-0001）：复用同一内核与协议层，经 `host/hub.ts`（参数化门面）实例化；**不加载本文件约束的 standalone 运行外壳**（host/server|http|up|service|channels|plugins、worker/worker、cli/），也不修改它们。改 `dsh/` 时：
+
+- 内核纯净性与「仅 evolve 写投影、仅 store 追加日志」守卫同样约束 `dsh/`（purity.test.ts 已扩容；`dsh/lib`、`dsh/kernel`、`dsh/hub.ts` 是构建产物与字节副本，测试按副本豁免，改动必须来自源文件）。
+- `dsh/` 只允许 import node: 内建、仓库内相对模块和宿主 peer 包（`@deepseek-ai/*` 仅限运行时动态引用并保持 esbuild external）。
+- tsconfig include 与 `scripts/ci-scope.sh` 已含 `dsh/*`；新增目录照旧同步这两处与 purity 清单。
+- 发布形态：`lib/` 为 esbuild 产物（含指纹输入四文件的拷贝：kernel/evolve.ts、kernel/schema.sql、kernel/credentials.ts、lib/hub.ts——保证两壳投影指纹一致），消费侧零安装脚本。
+- 真机验收一律在隔离 `DSH_HOME` profile 做（`dsh/scripts/install-smoke.sh`）；不经用户同意不触碰正在运行的宿主实例。
+
 真机脚本在 `scripts/real-agents.ts`、`scripts/real-protocols.ts` 和 `scripts/delivery-e2e.ts`。真实交付脚本要求 `owner/name --run`，会创建并删除指定私有测试仓库；只有用户明确要求运行时才执行。其他测试使用临时 `AGENT_AUTOLOOP_HOME` 和随机端口，退出清理。飞书用假 CLI；不能拿已在线的应用再开一个事件监听。通道用本地假 HTTP 服务，不发真消息。桌面通知用放在 PATH 最前面的假命令，不真的弹：`init` 之后再跑 `up` 的测试都要带上。`scripts/install-smoke.sh` 在临时 HOME 里走一遍从安装到卸载，装的是已提交的代码，CI 在 ubuntu 和 macOS 上都跑。

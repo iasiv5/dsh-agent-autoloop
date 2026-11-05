@@ -24,7 +24,7 @@ while IFS= read -r file; do
     README.md | README.en.md | INSTALL.md | SECURITY.md | CONTRIBUTING.md | AGENTS.md | LICENSE) kind=docs ;;
     docs/* | .github/ISSUE_TEMPLATE/* | .github/pull_request_template.md) kind=docs ;;
     tests/simulation.test.ts) kind=full ;;
-    plugins/* | examples/* | skills/* | worker/* | host/* | cli/* | bin/* | scripts/* | tests/* | install.sh) kind=normal ;;
+    plugins/* | examples/* | skills/* | worker/* | host/* | cli/* | bin/* | scripts/* | tests/* | dsh/* | install.sh) kind=normal ;;
     *) kind=full ;;
   esac
   case "$kind" in
