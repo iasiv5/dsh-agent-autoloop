@@ -358,3 +358,25 @@ test("an idle bridge still beats every minute, so a worker is never read as dead
     s.cleanup();
   }
 });
+
+test("one matter costs a bounded number of claims: a commit never re-enters dispatch", async () => {
+  // Failure mode: a claim commits a fact, the kernel calls onChange synchronously, and onChange dispatched again,
+  // recursing until the stack gave out. One ingested matter must claim a handful of times at most.
+  const s = setup();
+  const hub = s.hub as unknown as { claimNext: (...args: unknown[]) => unknown };
+  const kernelClaim = hub.claimNext.bind(s.hub);
+  let claims = 0;
+  hub.claimNext = (...args: unknown[]) => {
+    claims += 1;
+    assert.ok(claims <= 10, `claimNext re-entered ${claims} times`);
+    return kernelClaim(...args);
+  };
+  try {
+    s.bridge.start();
+    s.hub.ingest("local", { id: "e1", type: "demo.start", subject: "s1" });
+    await s.flush();
+    assert.ok(claims <= 3, `one matter claimed ${claims} times`);
+  } finally {
+    s.cleanup();
+  }
+});

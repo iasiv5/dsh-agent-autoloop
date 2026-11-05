@@ -1927,19 +1927,34 @@ function createBridge(hub, world, options) {
     const due = hub.one(
       "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'"
     );
-    let ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1e3), 2147483647);
-    ms = Math.min(ms, HEARTBEAT_FLOOR_MS);
+    const untilDue = (due?.at ?? Infinity) - world.now();
+    const ms = untilDue > 0 ? Math.min(Math.max(untilDue, 1e3), HEARTBEAT_FLOOR_MS) : HEARTBEAT_FLOOR_MS;
     armDisposer = world.schedule(ms, () => {
       hub.tick();
       beat();
     });
   }
+  let dispatching = false;
+  function hasQueued() {
+    const now = new Date(world.now()).toISOString();
+    return Boolean(
+      hub.one(
+        `SELECT 1 AS found FROM projections WHERE collection='runs' AND json_extract(data, '$.state')='queued' AND json_extract(data, '$.not_before') <= '${now}' LIMIT 1`
+      )
+    );
+  }
   function dispatch() {
-    if (paused) return;
-    while ([...entries.values()].filter((entry) => !entry.settling).length < options.capacity) {
-      const job = hub.claimNext(options.worker, claimRandom());
-      if (!job) return;
-      void start(job);
+    if (paused || dispatching) return;
+    dispatching = true;
+    try {
+      while ([...entries.values()].filter((entry) => !entry.settling).length < options.capacity) {
+        if (!hasQueued()) return;
+        const job = hub.claimNext(options.worker, claimRandom());
+        if (!job) return;
+        void start(job);
+      }
+    } finally {
+      dispatching = false;
     }
   }
   async function start(job) {

@@ -118,20 +118,42 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
     const due = hub.one<{ at: number }>(
       "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'",
     );
-    let ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1000), 2147483647);
-    ms = Math.min(ms, HEARTBEAT_FLOOR_MS);
+    // A deadline already in the past is not re-armed at a tight interval: the kernel can keep reporting it, and each
+    // tick that rewrites it commits a fact. The next beat covers it within the floor instead.
+    const untilDue = (due?.at ?? Infinity) - world.now();
+    const ms = untilDue > 0 ? Math.min(Math.max(untilDue, 1000), HEARTBEAT_FLOOR_MS) : HEARTBEAT_FLOOR_MS;
     armDisposer = world.schedule(ms, () => {
       hub.tick();
       beat();
     });
   }
 
+  // Re-entrancy guard. A claim commits a fact, the kernel calls onChange synchronously on every commit, and onChange
+  // lands back here. Unguarded, that is unbounded recursion (observed 2026-11-05: 1.45M facts in five hours).
+  let dispatching = false;
+
+  function hasQueued(): boolean {
+    const now = new Date(world.now()).toISOString();
+    return Boolean(
+      hub.one(
+        `SELECT 1 AS found FROM projections WHERE collection='runs' AND json_extract(data, '$.state')='queued' AND json_extract(data, '$.not_before') <= '${now}' LIMIT 1`,
+      ),
+    );
+  }
+
   function dispatch() {
-    if (paused) return; // pause is a bridge-side gate: held runs keep their lease, nothing new is claimed
-    while ([...entries.values()].filter((entry) => !entry.settling).length < options.capacity) {
-      const job = hub.claimNext(options.worker, claimRandom());
-      if (!job) return;
-      void start(job);
+    if (paused || dispatching) return; // pause is a bridge-side gate; a nested call is the commit echoing back
+    dispatching = true;
+    try {
+      while ([...entries.values()].filter((entry) => !entry.settling).length < options.capacity) {
+        // An empty claim still commits a fact, so the kernel is asked only when a queued run is due to hand out.
+        if (!hasQueued()) return;
+        const job = hub.claimNext(options.worker, claimRandom());
+        if (!job) return;
+        void start(job);
+      }
+    } finally {
+      dispatching = false;
     }
   }
 
