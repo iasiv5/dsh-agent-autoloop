@@ -2459,6 +2459,7 @@ var inject = [
   "agents",
   "sessionPersistence",
   "workingDirectory",
+  "agentDefaultModel",
   "timer",
   "approval"
 ];
@@ -2480,15 +2481,20 @@ function apply(ctx) {
     const userMessage = (text2) => messageFactory ? messageFactory(text2) : { id: randomUUID(), role: "user", content: [{ type: "text", text: text2 }], source: { kind: "user" } };
     const world = {
       async createAgent(sessionId, cwd, agentOptions) {
+        const defaults = ctx.agentDefaultModel?.currentSelection?.() ?? { provider: "", model: "" };
+        const configured = {
+          provider: agentOptions?.provider ?? defaults.provider,
+          model: agentOptions?.model ?? defaults.model,
+          reasoningEffort: agentOptions?.effort ?? defaults.reasoningEffort
+        };
+        const setup = (agentCtx, agent) => {
+          agent.model?.select?.(configured);
+        };
         const handle = await ctx.agents.create({
           sessionId,
           meta: { cwd },
-          ...agentOptions?.model || agentOptions?.effort ? {
-            agentOptions: {
-              ...agentOptions.model && { model: agentOptions.model },
-              ...agentOptions.effort && { reasoningEffort: agentOptions.effort }
-            }
-          } : {}
+          agentOptions: configured,
+          setup
         });
         await ctx.workingDirectory?.set(handle.agent, cwd);
         if (config.approvalPolicy) ctx.approval?.setPolicy(handle.agent, config.approvalPolicy);

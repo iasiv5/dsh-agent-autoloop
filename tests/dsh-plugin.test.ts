@@ -83,6 +83,7 @@ test("the entry declares a name, the service injections and an apply function", 
     "agents",
     "sessionPersistence",
     "workingDirectory",
+    "agentDefaultModel",
     "timer",
     "approval",
   ]);

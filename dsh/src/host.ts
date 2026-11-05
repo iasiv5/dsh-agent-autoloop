@@ -18,6 +18,7 @@ export const inject: string[] = [
   "agents",
   "sessionPersistence",
   "workingDirectory",
+  "agentDefaultModel",
   "timer",
   "approval",
 ];
@@ -37,6 +38,7 @@ export interface EffectContext {
   };
   workingDirectory?: { set(agent: BridgeAgentHandle["agent"], path: string, signal?: AbortSignal): Promise<void> };
   approval?: { setPolicy(agent: BridgeAgentHandle["agent"], policy: "ask" | "never"): void };
+  agentDefaultModel?: { currentSelection(): { provider: string; model: string; reasoningEffort?: string } };
   on(name: string, handler: (...args: any[]) => unknown): () => void;
 }
 
@@ -68,17 +70,22 @@ export function apply(ctx: EffectContext): void {
 
     const world: BridgeWorld = {
       async createAgent(sessionId, cwd, agentOptions) {
+        // 程序化创建的会话必须显式安装模型选择（headless 同款）：setup 里 agent.model.select(...)。
+        // 可信规则的 model/effort 优先；宿主默认选择（agentDefaultModel）补齐 provider 等缺口。
+        const defaults = ctx.agentDefaultModel?.currentSelection?.() ?? { provider: "", model: "" };
+        const configured = {
+          provider: agentOptions?.provider ?? defaults.provider,
+          model: agentOptions?.model ?? defaults.model,
+          reasoningEffort: agentOptions?.effort ?? defaults.reasoningEffort,
+        };
+        const setup = (agentCtx: unknown, agent: { model?: { select(selection: unknown): void } }) => {
+          agent.model?.select?.(configured);
+        };
         const handle = await ctx.agents!.create({
           sessionId,
           meta: { cwd },
-          ...(agentOptions?.model || agentOptions?.effort
-            ? {
-                agentOptions: {
-                  ...(agentOptions.model && { model: agentOptions.model }),
-                  ...(agentOptions.effort && { reasoningEffort: agentOptions.effort }),
-                },
-              }
-            : {}),
+          agentOptions: configured,
+          setup,
         });
         // meta.cwd only lands in the session header; the tools' actual directory is this service's to set.
         await ctx.workingDirectory?.set(handle.agent, cwd);
