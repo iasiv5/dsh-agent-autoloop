@@ -1911,6 +1911,7 @@ function createBridge(hub, world, options) {
   let unsubscribe;
   let unsubscribeHub;
   let armDisposer;
+  const HEARTBEAT_FLOOR_MS = 6e4;
   function beat() {
     if (stopped) return;
     hub.heartbeat(
@@ -1927,7 +1928,7 @@ function createBridge(hub, world, options) {
       "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'"
     );
     let ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1e3), 2147483647);
-    if (entries.size) ms = Math.min(ms, 2 * 6e4);
+    ms = Math.min(ms, HEARTBEAT_FLOOR_MS);
     armDisposer = world.schedule(ms, () => {
       hub.tick();
       beat();

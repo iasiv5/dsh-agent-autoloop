@@ -345,3 +345,16 @@ test("usage reported by assistant messages accumulates once and lands in the fin
     s.cleanup();
   }
 });
+
+test("an idle bridge still beats every minute, so a worker is never read as dead while its claims wait", () => {
+  // Failure mode: with nothing held, the bridge armed only the next kernel deadline (possibly days away). The kernel
+  // then reads the worker as offline, skips the lease check, and a claimed run from before a restart pins a slot forever.
+  const s = setup();
+  try {
+    s.bridge.start();
+    const armed = s.timers.at(-1)!;
+    assert.ok(armed.ms <= 60_000, `idle beat is at most 60s, got ${armed.ms}ms`);
+  } finally {
+    s.cleanup();
+  }
+});

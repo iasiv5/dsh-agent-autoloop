@@ -94,6 +94,9 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
   let unsubscribeHub: (() => void) | undefined;
   let armDisposer: (() => void) | undefined;
 
+  /** The longest the bridge may stay silent, held runs or not. Must stay well inside the kernel's WORKER_FRESH (2 min). */
+  const HEARTBEAT_FLOOR_MS = 60_000;
+
   /** One bridge beat: hand in what ended (via events), keep the lease, take on more work. */
   function beat() {
     if (stopped) return;
@@ -105,9 +108,10 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
     arm();
   }
 
-  /** Arm the single earliest kernel deadline; firing it ticks the hub and takes more work. While runs are held, the
-   * next beat never sits further out than the heartbeat floor — the kernel's lease (WORKER_FRESH/RUN_LEASE) assumes a
-   * live worker keeps saying so. */
+  /** Arm the single earliest kernel deadline; firing it ticks the hub and takes more work. The next beat never sits
+   * further out than the heartbeat floor: the kernel reads a worker as dead once its last beat is older than
+   * WORKER_FRESH, and a dead worker's claimed runs never expire. An idle bridge that stopped beating would pin its
+   * concurrency slot forever (observed 2026-11-05: a run claimed before a restart blocked every later matter). */
   function arm() {
     armDisposer?.();
     if (stopped) return;
@@ -115,7 +119,7 @@ export function createBridge(hub: Hub, world: BridgeWorld, options: BridgeOption
       "SELECT MIN(json_extract(data, '$.at')) AS at FROM projections WHERE collection='due'",
     );
     let ms = Math.min(Math.max((due?.at ?? Infinity) - world.now(), 1000), 2147483647);
-    if (entries.size) ms = Math.min(ms, 2 * 60_000);
+    ms = Math.min(ms, HEARTBEAT_FLOOR_MS);
     armDisposer = world.schedule(ms, () => {
       hub.tick();
       beat();
