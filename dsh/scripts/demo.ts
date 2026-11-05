@@ -122,7 +122,10 @@ const world: BridgeWorld = {
     };
     return { agent: api };
   },
-  liveAgent: (sessionId) => (sessions.has(sessionId) ? { agent: sessions.get(sessionId)! } : undefined),
+  liveAgent: (sessionId) => {
+    const api = sessions.get(sessionId);
+    return api ? { agent: api, dispose() {} } : undefined;
+  },
   onSessionEvent(subscribed) {
     handler = subscribed;
     return () => {};

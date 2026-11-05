@@ -33,6 +33,7 @@ export interface EffectContext {
     create(options: Record<string, unknown>): Promise<BridgeAgentHandle>;
     resume(options: Record<string, unknown>): Promise<BridgeAgentHandle>;
     get(sessionId: string): BridgeAgentHandle["agent"] | undefined;
+    dispose?(agent: BridgeAgentHandle["agent"]): unknown;
   };
   workingDirectory?: { set(agent: BridgeAgentHandle["agent"], path: string, signal?: AbortSignal): Promise<void> };
   approval?: { setPolicy(agent: BridgeAgentHandle["agent"], policy: "ask" | "never"): void };
@@ -84,6 +85,7 @@ export function apply(ctx: EffectContext): void {
         // Only an explicitly configured policy is applied; otherwise the deployment default (ask) stays in charge,
         // because a business decision from the kernel never doubles as a tool approval.
         if (config.approvalPolicy) ctx.approval?.setPolicy(handle.agent, config.approvalPolicy);
+        handles.set(sessionId, handle);
         return handle;
       },
       async resumeAgent(sessionId) {
@@ -113,6 +115,7 @@ export function apply(ctx: EffectContext): void {
       userMessage,
     };
 
+    const handles = new Map<string, BridgeAgentHandle>();
     const bridge = createBridge(hub, world, { worker: config.worker, capacity: config.capacity });
     const disposeCommands = ctx.commands
       ? registerCommands((definition) => ctx.commands!.register(definition), hub, "local")

@@ -32,6 +32,7 @@ function setup() {
     const api = {
       id: sessionId,
       messages: [] as string[],
+      dispose() {},
       send(message: any) {
         api.messages.push(
           Array.isArray(message?.content)

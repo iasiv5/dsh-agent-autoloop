@@ -2487,6 +2487,7 @@ function apply(ctx) {
         });
         await ctx.workingDirectory?.set(handle.agent, cwd);
         if (config.approvalPolicy) ctx.approval?.setPolicy(handle.agent, config.approvalPolicy);
+        handles.set(sessionId, handle);
         return handle;
       },
       async resumeAgent(sessionId) {
@@ -2515,6 +2516,7 @@ function apply(ctx) {
       runsDir: join6(dir, "runs"),
       userMessage
     };
+    const handles = /* @__PURE__ */ new Map();
     const bridge = createBridge(hub, world, { worker: config.worker, capacity: config.capacity });
     const disposeCommands = ctx.commands ? registerCommands((definition) => ctx.commands.register(definition), hub, "local") : void 0;
     const routeDisposers = [];
