@@ -42,7 +42,15 @@ let handler: ((sessionId: string, event: any) => void) | undefined;
 let modelCalls = 0;
 const sessions = new Map<
   string,
-  { id: string; cwd: string; prompts: string[]; replies: string[]; send(message: any): void; cancel(): void }
+  {
+    id: string;
+    cwd: string;
+    prompts: string[];
+    replies: string[];
+    send(message: any): void;
+    cancel(): void;
+    dispose(): void;
+  }
 >();
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
@@ -102,9 +110,10 @@ function makeApi(sessionId: string, cwd: string) {
       scriptReply(sessionId, prompt, cwd);
     },
     cancel() {},
+    dispose() {},
   };
   sessions.set(sessionId, api);
-  return { agent: api };
+  return { agent: api, dispose: () => void api.dispose() };
 }
 
 const world: BridgeWorld = {
@@ -120,7 +129,7 @@ const world: BridgeWorld = {
       api.prompts.push(prompt);
       scriptReply(sessionId, prompt, api.cwd);
     };
-    return { agent: api };
+    return { agent: api, dispose: () => void api.dispose() };
   },
   liveAgent: (sessionId) => {
     const api = sessions.get(sessionId);

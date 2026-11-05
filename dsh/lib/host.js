@@ -2495,8 +2495,10 @@ function apply(ctx) {
         return handle;
       },
       liveAgent(sessionId) {
+        const known = handles.get(sessionId);
+        if (known) return known;
         const agent = ctx.agents.get(sessionId);
-        return agent ? { agent } : void 0;
+        return agent ? { agent, dispose: () => void ctx.agents?.dispose?.(agent) } : void 0;
       },
       onSessionEvent(handler) {
         return ctx.on("session/event", (session, event) => handler(String(session?.id ?? ""), event));

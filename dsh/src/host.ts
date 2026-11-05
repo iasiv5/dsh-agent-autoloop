@@ -93,8 +93,10 @@ export function apply(ctx: EffectContext): void {
         return handle;
       },
       liveAgent(sessionId) {
+        const known = handles.get(sessionId);
+        if (known) return known;
         const agent = ctx.agents!.get(sessionId);
-        return agent ? { agent } : undefined;
+        return agent ? { agent, dispose: () => void ctx.agents?.dispose?.(agent) } : undefined;
       },
       onSessionEvent(handler) {
         return ctx.on("session/event", (session: any, event: any) => handler(String(session?.id ?? ""), event));

@@ -50,16 +50,16 @@ function setup() {
       created.push(sessionId);
       assert.equal(cwd, "/tmp");
       sessions.set(sessionId, sessionsApi(sessionId));
-      return { agent: sessions.get(sessionId)! };
+      return { agent: sessions.get(sessionId)!, dispose() {} };
     },
     async resumeAgent(sessionId) {
       if (resumeFailures.has(sessionId)) throw new Error("session not persisted");
       resumed.push(sessionId);
       if (!sessions.has(sessionId)) sessions.set(sessionId, sessionsApi(sessionId));
-      return { agent: sessions.get(sessionId)! };
+      return { agent: sessions.get(sessionId)!, dispose() {} };
     },
     liveAgent(sessionId) {
-      return sessions.has(sessionId) ? { agent: sessions.get(sessionId)! } : undefined;
+      return sessions.has(sessionId) ? { agent: sessions.get(sessionId)!, dispose() {} } : undefined;
     },
     onSessionEvent(subscribed) {
       handler = subscribed;
