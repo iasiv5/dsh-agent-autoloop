@@ -11,6 +11,14 @@ import { createBridge, type BridgeAgentHandle, type BridgeWorld } from "./bridge
 import { registerCommands } from "./commands.ts";
 import { dashboardRoutes, type Route } from "./web.ts";
 
+/** The bridge's own options, derived from the validated config in one place. A field left out at the call site
+ * silently hands every run back to the host's default model (observed 2026-11-05: runs went to github-copilot). */
+export const bridgeOptions = (config: { worker: string; capacity: number; provider?: string }) => ({
+  worker: config.worker,
+  capacity: config.capacity,
+  provider: config.provider,
+});
+
 export const name = "agent-autoloop";
 export const inject: string[] = [
   "webServer",
@@ -125,7 +133,7 @@ export function apply(ctx: EffectContext): void {
     };
 
     const handles = new Map<string, BridgeAgentHandle>();
-    const bridge = createBridge(hub, world, { worker: config.worker, capacity: config.capacity });
+    const bridge = createBridge(hub, world, bridgeOptions(config));
     const disposeCommands = ctx.commands
       ? registerCommands((definition) => ctx.commands!.register(definition), hub, "local")
       : undefined;

@@ -2468,6 +2468,11 @@ function dashboardRoutes(io) {
 }
 
 // src/host.ts
+var bridgeOptions = (config) => ({
+  worker: config.worker,
+  capacity: config.capacity,
+  provider: config.provider
+});
 var name = "agent-autoloop";
 var inject = [
   "webServer",
@@ -2546,7 +2551,7 @@ function apply(ctx) {
       userMessage
     };
     const handles = /* @__PURE__ */ new Map();
-    const bridge = createBridge(hub, world, { worker: config.worker, capacity: config.capacity });
+    const bridge = createBridge(hub, world, bridgeOptions(config));
     const disposeCommands = ctx.commands ? registerCommands((definition) => ctx.commands.register(definition), hub, "local") : void 0;
     const routeDisposers = [];
     for (const route of dashboardRoutes({ hub, bridge, config, configDir: dir })) {
@@ -2571,6 +2576,7 @@ function apply(ctx) {
 }
 export {
   apply,
+  bridgeOptions,
   inject,
   name
 };

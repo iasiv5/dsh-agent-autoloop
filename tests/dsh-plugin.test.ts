@@ -90,6 +90,14 @@ test("the entry declares a name, the service injections and an apply function", 
   assert.equal(typeof host.apply, "function");
 });
 
+test("the bridge takes the configured provider, so runs never fall back to the host default model", () => {
+  assert.deepEqual(host.bridgeOptions({ worker: "dsh", capacity: 2, provider: "zai-coding-cn" }), {
+    worker: "dsh",
+    capacity: 2,
+    provider: "zai-coding-cn",
+  });
+});
+
 test("apply owns a private data dir and the lock, refuses a second live instance and releases on teardown", () => {
   const { make, clean } = scratch();
   try {
