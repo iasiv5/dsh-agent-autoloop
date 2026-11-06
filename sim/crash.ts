@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { decide } from "../kernel/decide.ts";
 import { empty, evolve, rows, snapshot } from "../kernel/evolve.ts";
-import { commit, readLog, rebuild, openView } from "../kernel/store.ts";
+import { commit, iterateLog, rebuild, openView } from "../kernel/store.ts";
 import { rules, environment } from "./world.ts";
 import { random } from "./random.ts";
 import { invariants } from "./invariants.ts";
@@ -82,7 +82,7 @@ export async function crashCheck(count = 1000, seed = 0xc0ffee) {
       const db = database(file);
       try {
         assert.equal(db.prepare("PRAGMA integrity_check").get()!.integrity_check, "ok");
-        const log = readLog(db);
+        const log = [...iterateLog(db)];
         let view = evolve(empty(), log);
         for (const seq of acks)
           assert.ok(

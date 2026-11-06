@@ -2,7 +2,13 @@
 // a retry starts a new conversation instead of going on, an error or a turn that never finished counts as an answer, a
 // program's warning is taken for its answer, a finished Claude run printed as one JSON array is read as a failure, the
 // session isn't picked out, a command line's placeholder isn't filled in, or a background Codex run assumes it inherited
-// an application's browser connection.
+// an application's browser connection. A turn that got going and then broke, or was killed before it finished, doesn't
+// say it started, so the worker runs its prompt again; one that never got going says it did, so the worker doesn't start a
+// new session for it; what Claude said before a background task ended is taken for its answer, or starts the wait for a
+// turn that won't exit; the raw messages of a broken Claude run become the reason it failed. A line of output that's JSON
+// but no message, like `null`, stops a plugin reading anything. A command line's placeholder pass rewrites the prompt
+// itself — a `{cwd}` or a `$&` the person wrote arrives as the folder or as `{prompt}` — so the program is asked
+// something other than what the event said.
 import assert from "node:assert/strict";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -23,6 +29,7 @@ type Adapter = import("../worker/agents.ts").Adapter;
 const claude: Adapter = (await import("../plugins/claude/agent.ts")).default;
 const codex: Adapter = (await import("../plugins/codex/agent.ts")).default;
 const command: Adapter = (await import("../plugins/command/agent.ts")).default;
+const dsh: Adapter = (await import("../plugins/dsh/agent.ts")).default;
 
 const turn = {
   prompt: "做这件事",
@@ -52,7 +59,9 @@ test("Claude Code: access, new and going on, model", { skip: !stubbed(claude, {}
   assert.ok(has(argv, "-p", "做这件事"));
   assert.ok(has(argv, "--session-id", "new-id"));
   assert.ok(has(argv, "--permission-mode", "acceptEdits"));
-  assert.ok(has(argv, "--output-format", "json"));
+  // It has to print as it goes: run as "json" it prints nothing until the end, and one cut short leaves no trace.
+  assert.ok(has(argv, "--output-format", "stream-json"));
+  assert.ok(argv.includes("--verbose"), "Claude Code refuses stream-json in print mode without it");
   assert.ok(!argv.includes("--model"));
   assert.ok(has(stubbed(claude, { access: "read" })!, "--permission-mode", "plan"));
   assert.ok(has(stubbed(claude, { access: "full" })!, "--permission-mode", "bypassPermissions"));
@@ -78,7 +87,8 @@ test("Claude Code: reading its result", () => {
   assert.deepEqual(claude.read(`noise\n${line({})}\n`, 0, ""), {
     text: "好了",
     session: "s",
-    usage: { input: 10, output: 2, cached: 6, cost: 0.5 },
+    usage: { input: 10, output: 2, cached: 6 },
+    sessionUsage: { cost: 0.5 },
     finished: true,
   });
   assert.match(
@@ -94,6 +104,88 @@ test("Claude Code: reading its result", () => {
   assert.equal(claude.read("", 1, "boom").error, "boom");
   assert.equal(claude.read("", 0, "").error, "没留下结果");
   assert.equal(claude.link!("s"), "claude://resume?session=s");
+});
+
+// What `claude -p --output-format stream-json --verbose` really prints, cut down to what's read.
+const stream = (...messages: object[]) => `${messages.map((message) => JSON.stringify(message)).join("\n")}\n`;
+const init = { type: "system", subtype: "init", session_id: "s" };
+const hook = { type: "system", subtype: "hook_started", session_id: "s" };
+const thinking = { type: "assistant", session_id: "s", message: { content: [{ type: "thinking" }] } };
+const tool = { type: "assistant", session_id: "s", message: { content: [{ type: "tool_use", name: "Bash" }] } };
+const toolResult = { type: "user", session_id: "s", message: { content: [{ type: "tool_result", content: "机密" }] } };
+const said = (result: string, num_turns = 1) => ({
+  type: "result",
+  subtype: "success",
+  is_error: false,
+  result,
+  num_turns,
+  session_id: "s",
+});
+const tasks = (...running: string[]) => ({
+  type: "system",
+  subtype: "background_tasks_changed",
+  tasks: running.map((task_id) => ({ task_id, task_type: "local_bash" })),
+  session_id: "s",
+});
+
+test("Claude Code: a turn that got going says so, however it ended", () => {
+  const cut = stream(hook, init, tool, toolResult);
+  assert.deepEqual(claude.read(cut, null, ""), { session: "s", started: true }, "still going, or vanished");
+  const killed = claude.read(cut, 143, "");
+  assert.equal(killed.session, "s");
+  assert.equal(killed.started, true);
+  assert.equal(killed.error, "没留下结果");
+  assert.equal(claude.read(stream(init), null, "").started, true, "it has the prompt, in a conversation that's there");
+  const failed = { ...said("API Error: 500"), is_error: true };
+  assert.equal(claude.read(stream(init, thinking, failed), 1, "").started, true);
+  assert.equal(claude.read(stream(failed), 1, "").started, true, "only the last line, it took a turn");
+  assert.equal(claude.read(stream(init, tool, said("好了", 2)), 0, "").text, "好了");
+});
+
+test("Claude Code: a resume that never got going doesn't say it started, and says why", () => {
+  const missing = {
+    type: "result",
+    subtype: "error_during_execution",
+    is_error: true,
+    num_turns: 0,
+    session_id: "old",
+    errors: ["No conversation found with session ID: old"],
+  };
+  const reading = claude.read(stream(missing), 1, "No conversation found with session ID: old");
+  assert.equal(reading.started, undefined);
+  assert.equal(reading.error, "No conversation found with session ID: old");
+  assert.equal(claude.read("", 1, "No conversation found").started, undefined, "printed as json: nothing on stdout");
+  assert.equal(claude.read(stream(hook), 1, "boom").started, undefined, "a hook runs before it has the prompt");
+  assert.deepEqual(claude.read(stream(hook), null, ""), { session: "s" });
+});
+
+test("Claude Code: the raw messages of a broken run aren't the reason it failed", () => {
+  assert.equal(claude.read(stream(init, tool, toolResult), 1, "连接断了").error, "连接断了");
+  assert.doesNotMatch(claude.read(stream(init, tool, toolResult), 1, "").error!, /机密|tool_result/);
+  assert.equal(
+    claude.read("Invalid API key\n", 1, "").error,
+    "Invalid API key",
+    "its complaint on stdout still counts",
+  );
+});
+
+test("Claude Code: what it said before a background task ended isn't its answer", () => {
+  const waiting = stream(init, tool, tasks("t1"), toolResult, said("已启动", 2));
+  assert.deepEqual(claude.read(waiting, null, ""), { session: "s", started: true }, "still going, so not over");
+  assert.equal(claude.read(waiting, 137, "").text, undefined, "killed while waiting: it never got to its answer");
+  assert.equal(claude.read(waiting, 137, "").error, "没留下结果");
+  assert.equal(claude.read(waiting, 0, "").text, "已启动", "it ended by itself: that was its last word");
+  const ended = stream(init, tool, tasks("t1"), toolResult, said("已启动", 2), tasks());
+  assert.equal(claude.read(ended, null, "").finished, true, "nothing left to come back for");
+  assert.equal(claude.read(ended, null, "").text, "已启动");
+  for (const next of [init, thinking, toolResult]) {
+    const going = stream(init, tool, tasks("t1"), toolResult, said("已启动", 2), tasks(), next);
+    assert.deepEqual(claude.read(going, null, ""), { session: "s", started: true }, "a later turn is going");
+    assert.equal(claude.read(going, 1, "").error, "没留下结果", "and it broke");
+  }
+  const done = stream(init, tool, tasks("t1"), said("已启动", 2), tasks(), init, thinking, said("结束了"));
+  assert.equal(claude.read(done, null, "").finished, true);
+  assert.equal(claude.read(done, 0, "").text, "结束了");
 });
 
 test("Codex: access, new and going on", { skip: !stubbed(codex, {}) }, () => {
@@ -135,7 +227,7 @@ test("Codex: only a finished turn's last message is its answer", () => {
     session: "t",
     text: "好了",
     finished: true,
-    usage: { input: 9, output: 1, cached: 3 },
+    sessionUsage: { input: 9, output: 1, cached: 3 },
   });
   assert.deepEqual(
     codex.read(lines(started, said("中途")), null, ""),
@@ -157,6 +249,26 @@ test("Codex: only a finished turn's last message is its answer", () => {
   assert.equal(codex.link!("t"), "codex://threads/t");
 });
 
+test("Codex: a turn that got going says so, however it ended; one that never did doesn't", () => {
+  const lines = (...events: object[]) => events.map((event) => JSON.stringify(event)).join("\n");
+  const thread = { type: "thread.started", thread_id: "t" };
+  const warning = { type: "item.completed", item: { type: "error", message: "under development" } };
+  const turn = { type: "turn.started" };
+  const running = { type: "item.started", item: { type: "command_execution" } };
+  const cut = lines(thread, warning, turn, running);
+  assert.deepEqual(codex.read(cut, null, ""), { session: "t", started: true }, "still going, or vanished");
+  assert.deepEqual(codex.read(cut, 143, ""), {
+    session: "t",
+    started: true,
+    error: "Codex 没有完成并留下实际结果",
+  });
+  assert.equal(codex.read(lines(thread, turn, { type: "turn.failed" }), 1, "").started, true);
+  assert.equal(codex.read(lines(thread, warning), 1, "boom").started, undefined, "a warning isn't the turn");
+  const missing = "Error: thread/resume: thread/resume failed: no rollout found for thread id x (code -32600)";
+  assert.equal(codex.read("", 1, missing).started, undefined);
+  assert.equal(codex.read("", 1, "cannot resume: active writer").started, undefined);
+});
+
 test("a plain command: placeholders filled in, stdout is its last message, a bad exit code is a failure", () => {
   const argv = command.command({
     ...turn,
@@ -170,6 +282,31 @@ test("a plain command: placeholders filled in, stdout is its last message, a bad
   assert.equal(command.link, undefined, "it has no session to go on in");
 });
 
+test("a plain command's prompt reaches the program as it was written, whatever it contains", () => {
+  // The prompt is what someone asked for; the placeholders belong to the command line, not to the words put in it.
+  const written = [
+    "把 {cwd} 这个词原样打印出来",
+    "价格是 $& 元",
+    "路径 $` 和 $' 也要留下",
+    "{context} 和 {prompt} 都是字面",
+  ];
+  for (const prompt of written) {
+    const argv = command.command({ ...turn, prompt, command: ["tool", "-p", "{prompt}"] });
+    assert.deepEqual(argv, ["tool", "-p", prompt], `${prompt} 传到程序时被改写了`);
+  }
+  // The command line itself still fills in, and one that names the prompt twice gets it twice.
+  const both = command.command({ ...turn, model: "m", command: ["tool", "{prompt}", "{model}"] });
+  assert.deepEqual(both, ["tool", "做这件事", "m"]);
+});
+
 test("a program that isn't there says so", () => {
   assert.throws(() => findProgram("surely-not-installed-anywhere"), /找不到 surely-not-installed-anywhere/);
+});
+
+test("a line of output that's JSON but no message is noise to every plugin", () => {
+  const noise = 'null\n42\n"words"\n[]\n';
+  for (const adapter of [claude, codex, command, dsh]) {
+    assert.doesNotThrow(() => adapter.read(noise, null, ""));
+    assert.doesNotThrow(() => adapter.read(noise, 0, ""));
+  }
 });

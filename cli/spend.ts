@@ -1,6 +1,6 @@
 // The cost line in `agent-autoloop status`, from /v1/state's completion-time totals. Agents report usage for themselves, or
 // don't: a plain command says nothing, and some give tokens but no price. So every figure says how many rounds it leaves out.
-import type { Spending } from "../kernel/state.ts";
+import type { Spending } from "../host/state.ts";
 const count = new Intl.NumberFormat("zh-CN", { notation: "compact", maximumFractionDigits: 1 });
 /** To two places, a day on a cheap model would read as nothing at all. */
 const dollars = (amount: number) => (amount > 0 && amount < 0.01 ? "<$0.01" : `$${amount.toFixed(2)}`);

@@ -1,10 +1,39 @@
 // Failure modes: published schemas accept an impersonated source, malformed receipts, or credentials in event data;
 // the wire contract drifts from the validators, and conformance accepts a server that opens the wrong door.
 // Required job structure and inherited object names must not bypass schema checks; Unicode limits count code points.
+// FYI notices must accept only an optional boolean without weakening notice limits or changing question receipts.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { checkSchema } from "../protocol/schema.ts";
 import { parseEvent, parseResult } from "../protocol/validate.ts";
+
+test("notice receipts accept an optional boolean fyi and keep all other boundaries", () => {
+  const notice = { title: "已设好", text: "每天九点检查", key: "daily-check" };
+  for (const item of [notice, { ...notice, fyi: true }, { ...notice, fyi: false }]) {
+    const result = { outcome: "done", notice: [item] };
+    assert.deepEqual(parseResult(result), result);
+    assert.deepEqual(checkSchema("result", result), []);
+  }
+  for (const item of [
+    ...[null, 0, 1, "true", [], {}].map((fyi) => ({ ...notice, fyi })),
+    { ...notice, fyi: true, title: "" },
+    { ...notice, fyi: true, title: "x".repeat(201) },
+    { ...notice, fyi: true, text: " " },
+    { ...notice, fyi: true, text: "x".repeat(4001) },
+    { ...notice, fyi: true, key: "x".repeat(101) },
+    { ...notice, fyi: true, unknown: true },
+  ]) {
+    const result = { outcome: "done", notice: [item] };
+    assert.throws(() => parseResult(result), /notice/);
+    assert.ok(checkSchema("result", result).length);
+  }
+  const tooMany = { outcome: "done", notice: Array(11).fill({ ...notice, fyi: true }) };
+  assert.throws(() => parseResult(tooMany), /notice/);
+  assert.ok(checkSchema("result", tooMany).length);
+  const ask = { outcome: "done", ask: [{ ...notice, options: ["继续", "暂停"], fyi: true }] };
+  assert.throws(() => parseResult(ask), /ask/);
+  assert.ok(checkSchema("result", ask).length);
+});
 
 test("wire schemas agree with event and receipt boundaries", () => {
   for (const input of [

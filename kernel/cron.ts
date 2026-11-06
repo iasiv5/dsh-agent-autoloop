@@ -112,6 +112,8 @@ export function dayStart(now: number, zone: string) {
   return moment(clock.year, clock.month, clock.day, 0, 0, zone) ?? now;
 }
 
+// With the rest of the cron and not with the status summary: a client's own page can import this file, which needs nothing
+// of Node.
 const WEEKDAYS = ["日", "一", "二", "三", "四", "五", "六", "日"];
 
 /** A common schedule in plain words (每天 18:00, 每周日 06:00, 工作日 09:00, 每月 1 日 04:00); any other as written. */

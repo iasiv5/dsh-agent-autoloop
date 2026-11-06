@@ -1,6 +1,7 @@
 // What a source sends becomes one event, and the rules decide what work it makes. Failure cases: an event missing its id
 // or type, with a field too long, a link that isn't a plain web address, a subject that isn't an identifier (it reaches
-// the Agent's prompt), or a misspelt field is kept; the same event sent twice is kept twice or makes work twice; an event
+// the Agent's prompt), or a misspelt field is kept; the same event sent twice is kept twice or makes work twice, as one
+// with half a Unicode character in its id would be: it's stored and looked up as different bytes, so it never matches; an event
 // matching two rules makes work for only one; an event no rule matches is dropped instead of kept for the owner to see;
 // one source's event matches another source's rule.
 import assert from "node:assert/strict";
@@ -8,7 +9,7 @@ import { test } from "node:test";
 import { at, setup } from "./helpers.ts";
 
 setup("events");
-const { ingest, unrouted } = await import("../host/runtime.ts");
+const { ingest, unrouted } = await import("./hub.ts");
 const { InputError } = await import("../kernel/errors.ts");
 const { all, run } = await import("./storage.ts");
 
@@ -58,6 +59,14 @@ test("the same event sent twice is kept once and makes work once", () => {
   assert.equal(all("SELECT id FROM runs").length, 1);
   // The same id from another source is another event.
   assert.equal(ingest("ops", { id: "feedback:1", type: "other" }, at(2)).duplicate, false);
+});
+
+test("an id with half a character in it is refused: stored and looked up differently, it could never match itself", () => {
+  clean();
+  assert.throws(() => ingest("app", { ...good, id: "broken-\ud800-id" }, at(0)), InputError);
+  assert.equal(all("SELECT id FROM events").length, 0);
+  assert.equal(ingest("app", { ...good, id: "一条-😀" }, at(0)).duplicate, false);
+  assert.equal(ingest("app", { ...good, id: "一条-😀" }, at(0)).duplicate, true);
 });
 
 test("an event matching two rules makes work for both", () => {

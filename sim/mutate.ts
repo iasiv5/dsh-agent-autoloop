@@ -1,13 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { cpSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const edits: [string, string, string, string][] = [
   ["event-duplicate", "decide.ts", "if (existing) return { event:", "if (false && existing) return { event:"],
   ["source-boundary", "decide.ts", "rule.when.source === source", "true"],
-  ["parallel-lane", "decide.ts", 'const lane = rule.parallel ? subject : ""', 'const lane = ""'],
+  ["parallel-lane", "decide.ts", 'id, rule.parallel ? event.subject : "")', 'id, "")'],
+  ["session-in-use", "decide.ts", "going.some((other) => (other.session ?? other.resume) === session)", "false"],
+  ["resume-after-stop", "decide.ts", 'last?.state !== "cancelled" && ', ""],
   ["group-capacity", "decide.ts", "claimed.filter((other) => other.grp === run.grp).length <", "0 <"],
   ["lane-exclusion", "decide.ts", "!claimed.some((other) => other.grp === run.grp && other.lane === run.lane)", "true"],
   [
@@ -37,31 +39,38 @@ const edits: [string, string, string, string][] = [
   ["quiet-delivery", "decide.ts", "if (card.quiet ||", "if (false ||"],
   ["delivery-lease", "decide.ts", "not_before: iso(now + MINUTE)", "not_before: iso(now)"],
   ["delivery-version", "decide.ts", "version: Math.max(delivery.version, version)", "version: version"],
-  [
-    "timer-fire",
-    "decide.ts",
-    "timer.event_id === null && Date.parse(timer.at) <= now",
-    "timer.event_id !== null && Date.parse(timer.at) <= now",
-  ],
+  ["timer-fire", "decide.ts", "Date.parse(timer.at) <= now", "Date.parse(timer.at) > now"],
   [
     "cron-latest",
     "decide.ts",
     "latestBefore(cron, Date.parse(schedule.next_at), now, timezone)",
     "Date.parse(schedule.next_at)",
   ],
-  [
-    "retry-deadline",
-    "due.ts",
-    'run.state === "queued" && notBefore > now',
-    'run.state === "queued" && notBefore < now',
-  ],
+  ["retry-deadline", "due.ts", 'if (notBefore > now) add("retry"', 'if (notBefore < now) add("retry"'],
+  ["due-after-change", "decide.ts", 'if (!draft.changes.length && type !== "tick")', 'if (type !== "tick")'],
+  ["due-at-tick", "decide.ts", 'if (!draft.changes.length && type !== "tick")', "if (!draft.changes.length)"],
+  ["offline-hides-new-work", "due.ts", "waiting.every((run) => run.created_at <= card.closed_at)", "true"],
+  ["offline-closed-comes-back", "due.ts", "waiting.every((run) => run.created_at <= card.closed_at)", "false"],
+  ["link-expiry", "http.ts", "call.now - Date.parse(card.created_at) > LINK_LIFETIME", "false"],
+  ["links-in-use", "http.ts", "if (!card || !linksInUse)", "if (!card)"],
   ["projection-drop", "evolve.ts", "if (row === null)", 'if (row === null || table === "cards")'],
   ["log-order", "store.ts", "ORDER BY seq", "ORDER BY seq DESC"],
   ["stale-commit", "store.ts", "if (latest !== view.seq)", "if (false)"],
   ["log-append", "store.ts", "for (const fact of facts) insert.run", "for (const fact of []) insert.run"],
   ["transaction-removed", "store.ts", "return transaction(db, () => {", "return ((work) => work())(() => {"],
 ];
-const tests = ["kernel", "events", "cards", "runs", "schedule", "stream", "purity"].map((n) => `tests/${n}.test.ts`);
+const tests = [
+  "kernel",
+  "events",
+  "cards",
+  "runs",
+  "schedule",
+  "stream",
+  "purity",
+  "queue-costs",
+  "http",
+  "resume-thread",
+].map((n) => `tests/${n}.test.ts`);
 export function mutate() {
   const root = join(import.meta.dirname, "..");
   const folder = mkdtempSync(join(tmpdir(), "agent-autoloop-mutation-"));
@@ -76,7 +85,8 @@ export function mutate() {
       timeout: 30000,
     });
   try {
-    for (const name of ["kernel", "protocol", "host", "tests", "package.json"])
+    // All of it: a test that reads a folder left out here fails the baseline here and nowhere else (#119, then #128).
+    for (const name of readdirSync(root).filter((name) => ![".git", ".claude", "node_modules"].includes(name)))
       cpSync(join(root, name), join(folder, name), { recursive: true });
     symlinkSync(join(root, "node_modules"), join(folder, "node_modules"));
     const baseline = run();
@@ -87,7 +97,8 @@ export function mutate() {
       file,
       change: (text: string) => {
         assert.ok(text.includes(before), name);
-        return text.replace(before, after);
+        // Everywhere: a guard that's written twice, as the store's transaction is, stands if only one is taken away.
+        return text.replaceAll(before, after);
       },
     }));
     const survived: string[] = [];

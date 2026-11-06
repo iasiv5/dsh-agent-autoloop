@@ -13,7 +13,7 @@ import { after, test } from "node:test";
 import { promisify } from "node:util";
 import { setup } from "./helpers.ts";
 import { spendLine as formatSpending } from "../cli/spend.ts";
-import { spendingOf } from "../kernel/state.ts";
+import { spendingOf } from "../host/state.ts";
 import { dayStart } from "../kernel/cron.ts";
 
 const home = setup("status-cost");
@@ -82,7 +82,7 @@ test("only rounds that ended count: not one still going, one waiting to try agai
 });
 
 test("status includes runs beyond the first page, including old runs that finish today", async () => {
-  const hub = await import("../host/runtime.ts");
+  const hub = await import("./hub.ts");
   const { serve } = await import("../host/http.ts");
   const server = serve(0);
   await new Promise((resolve) => server.once("listening", resolve));

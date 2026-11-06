@@ -11,7 +11,27 @@ import { promisify } from "node:util";
 import { after, test } from "node:test";
 import { setup } from "./helpers.ts";
 const home = setup("why");
-const hub = await import("../host/runtime.ts");
+const rulesFile = join(home, "rules.json");
+const rulesSaying = (prompt: string) =>
+  JSON.stringify({
+    sources: { shop: { name: "商店" } },
+    agents: { helper: { name: "助手", worker: "mac-mini", use: "command", command: ["true"] } },
+    channels: {},
+    rules: [
+      {
+        name: "处理订单",
+        when: { source: "shop", types: ["order.created"] },
+        to: "helper",
+        cwd: "/tmp",
+        parallel: 2,
+        prompt,
+        emits: { source: "shop", types: ["order.done"] },
+      },
+    ],
+  });
+writeFileSync(rulesFile, rulesSaying("private-rule-instructions"));
+process.env.AGENT_AUTOLOOP_RULES = rulesFile;
+const hub = await import("./hub.ts");
 const { serve } = await import("../host/http.ts");
 const server = serve(0);
 await once(server, "listening");
@@ -33,28 +53,8 @@ const cli = async (...args: string[]) =>
     )
   ).stdout;
 const start = Date.parse("2026-11-03T00:00:00Z");
-const config = hub.parseRules(
-  JSON.stringify({
-    sources: { shop: { name: "商店" } },
-    agents: { helper: { name: "助手", worker: "mac-mini", use: "command", command: ["true"] } },
-    channels: {},
-    rules: [
-      {
-        name: "处理订单",
-        when: { source: "shop", types: ["order.created"] },
-        to: "helper",
-        cwd: "/tmp",
-        parallel: 2,
-        prompt: "private-rule-instructions",
-        emits: { source: "shop", types: ["order.done"] },
-      },
-    ],
-  }),
-  start,
-);
 
 test("why prints the real event, rules version, worker, session, receipt, answer and continuation as a timeline", async () => {
-  hub.execute("rules", [config], start);
   hub.ingest("shop", { id: "order-42", type: "order.created", subject: "order-42" }, start + 1000);
   const job = hub.claimNext("mac-mini", "first", start + 2000)!;
   hub.started(job.run, job.token, { session: "pending", link: "https://example.com/sessions/pending" }, start + 2500);
@@ -108,11 +108,8 @@ test("why retains failed attempts and uses each attempt's rules version without 
   const first = hub.claimNext("mac-mini", "retry-1", start + 11000)!;
   hub.finish(first.run, first.token, { outcome: "failed", error: "连接断开" }, start + 12000);
   const before = hub.getView().get("config", "rules")!.version;
-  hub.execute(
-    "rules",
-    [{ ...config, rules: config.rules.map((r) => ({ ...r, prompt: "changed-private-instructions" })) }],
-    start + 13000,
-  );
+  writeFileSync(rulesFile, rulesSaying("changed-private-instructions"));
+  hub.reloadRules();
   const afterVersion = hub.getView().get("config", "rules")!.version;
   hub.claimNext("mac-mini", "retry-2", start + 312000);
   const output = await cli("why", String(first.run));

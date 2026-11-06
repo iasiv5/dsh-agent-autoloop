@@ -1,5 +1,5 @@
 // Fixture resets only; production writes go through decide/commit/evolve.
-import { fixtureClear } from "../host/runtime.ts";
+import { fixtureClear } from "./hub.ts";
 import type { Table } from "../kernel/evolve.ts";
 export { all, one } from "../host/runtime.ts";
 export const run = (sql: string) => {

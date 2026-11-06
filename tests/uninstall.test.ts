@@ -1,7 +1,7 @@
 // `agent-autoloop uninstall`, run from a copy of the program laid out as an install is, in a throwaway home with stand-ins for
 // launchctl and systemctl: nothing real can be reached. Failure cases: the service keeps running, or one started by hand does;
 // a process that only has the old number is killed; a link is left behind, in ~/.local/bin, elsewhere on PATH or among the
-// Agents' Skills; someone's own file, folder or link of the same name is removed, or a link that leads somewhere else; the
+// Agents' Skills, or reinstalling over the kept data doesn't bring them back; someone's own file, folder or link of the same name is removed, or a link that leads somewhere else; the
 // data is deleted by uninstall or --yes; with nobody at a terminal it hangs on the question; AGENT_AUTOLOOP_HOME
 // naming the user's home, or a folder this program didn't make, gets it deleted.
 import assert from "node:assert/strict";
@@ -166,6 +166,14 @@ test("at a terminal only confirming removes the program, and every answer preser
     assert.equal(existsSync(it.app), !gone);
     if (gone) linksAreGone(it);
   }
+});
+
+test("installing the service again brings back a Skill link that uninstalling took away", () => {
+  const it = install();
+  rmSync(skillLink(it));
+  // The stand-in service manager refuses; the link comes first.
+  it.run(["service", "install"]);
+  assert.ok(lstatSync(skillLink(it)).isSymbolicLink());
 });
 
 test("a hub started by hand is stopped too; a process that only has the old number isn't", async () => {

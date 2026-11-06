@@ -1,12 +1,37 @@
-// What's going on, for the owner's own clients, read from what's there: rules, cards, runs and who has been seen.
+// What's going on, for the owner's own clients, read from what's there: rules, cards, runs and who has been seen. Nothing
+// is decided by it, so it's no part of the kernel.
 import type { SQLInputValue } from "node:sqlite";
-import { describeCron, dayStart, nextRun, parseCron } from "./cron.ts";
-import { iso, type Row } from "./evolve.ts";
-import type { cardView } from "./query.ts";
-import { cronOf, eventRule, SCHEDULE, type Rules } from "./rules.ts";
+import { describeCron, dayStart, nextRun, parseCron } from "../kernel/cron.ts";
+import { SEEN_EVERY } from "../kernel/due.ts";
+import { iso, type Row } from "../kernel/evolve.ts";
+import type { cardView } from "../kernel/query.ts";
+import { cronOf, eventRule, SCHEDULE, type Rules } from "../kernel/rules.ts";
 
-/** Seen this recently counts as online. */
-const ONLINE = 120_000;
+/** The columns of the read-only SQL views over the projections, which the queries here read. */
+const VIEWS = {
+  events: "id source key type subject summary detail link routed received_at",
+  runs:
+    "id rule agent grp lane state attempts not_before claim last_result cancel_at resume session link created_at " +
+    "claimed_at seen_at finished_at summary error usage",
+  run_events: "run_id event_id",
+  cards:
+    "id key kind title text options recommend about state fyi quiet choice answer by result rule lane grp source " +
+    "agent session run_id answer_event version created_at decided_at closed_at",
+  deliveries: "card_id channel version ref tries first_try_at not_before error given_up",
+  timers: "id rule lane key source session about at event_id created_at",
+  schedules: "rule cron next_at",
+  seen: "kind name seen_at",
+  keys: "kind name hash created_at",
+};
+
+/** Made anew at every start, so changing them takes no rebuild and no migration. */
+export const viewStatements = Object.entries(VIEWS).map(([table, columns]) => {
+  const selected = columns.split(" ").map((column) => `json_extract(data,'$.${column}') AS ${column}`);
+  return `DROP VIEW IF EXISTS ${table}; CREATE VIEW ${table} AS SELECT ${selected.join(",")} FROM projections WHERE collection='${table}'`;
+});
+
+/** Seen this recently counts as online: two minutes of quiet, by a stamp that can be behind by SEEN_EVERY. */
+const ONLINE = 120_000 + SEEN_EVERY;
 const PAGE = 60;
 const WEEK = 7 * 86400_000;
 

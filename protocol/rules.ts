@@ -76,6 +76,7 @@ function checkRule(issues: string[], rules: Rules, rule: Rule, names: Set<string
     ["prompt", isText, NOT_EMPTY, true],
     ["group", isText, NOT_EMPTY, true],
     ["parallel", isCount, "要是正整数", true],
+    ["resume", (value) => typeof value === "boolean", "只能是 true 或 false", true],
     ["tell", (value) => TELLS.includes(value as string), `只能是 ${TELLS.join("、")}`, true],
     ["emits", isObject, "要是一个对象", true],
   ]);

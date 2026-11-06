@@ -7,18 +7,29 @@
 // failed; a run over its time or told to stop goes on, or leaves its children behind; the hub is told it stopped before it
 // has; more than capacity at once are taken; a claim is thrown away before its job has arrived; a receipt that can't be read
 // redoes the work, isn't asked for again, is asked for without end, or is dropped without telling the owner; a session that
-// can't be gone on in fails the run instead of starting a new one, or keeps trying; a turn's end that doesn't exit holds its
+// can't be gone on in fails the run instead of starting a new one, or keeps trying; a turn that went on in its session and
+// then broke, said nothing, or vanished is run again in a new one, or loses that session; a turn's end that doesn't exit holds its
 // place for ever; an old turn's exit is taken for a new one's; the hub gone for ten minutes isn't told, told every minute,
 // taken as told when the telling failed, tried without end, or not told again after it came back and went away again.
+// Session-cumulative usage must become per-launch deltas, including after a worker restart.
 // A shell replacing itself with the final move must not lose its identity before the exit file is published.
 // A failed or timed-out receipt repair must preserve the original business outcome; cancellation must reap a child
 // ignoring SIGTERM even after restart; adding usage must not turn a missing price into a reported zero.
+// A plugin that can't read what it printed, or gives back nothing, ends the worker, holds the run for ever, counts a run still
+// going as ended, or starts its prompt again in a new session, whether the run ended or vanished; or hands in a session made
+// up here in place of the one it read while the run was going, which a retry can't go on in; trouble with one run, like a
+// folder it can't write to, holds up the others, ends the worker or fills the log. Over ACP, a retry in a session a turn
+// already started in that breaks before the prompt redoes the work in a new one, or does so because something else has the
+// session open just now, and one the agent refuses or can't go on in doesn't get a new one; a "没跑成" after a finished tool
+// call is run together with what came before it and counts as work done; a failed turn whose agent won't go, or leaves
+// something holding its output, or closes its output and stays, holds its place until the time limit and loses the real
+// reason.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { setup } from "./helpers.ts";
+import { acpAgent, setup } from "./helpers.ts";
 
 const home = setup("worker");
 const folder = join(home, "project");
@@ -27,6 +38,7 @@ process.env.AGENT_AUTOLOOP_SECRET_X = "must-not-leak";
 process.env.AGENT_AUTOLOOP_PUBLIC_URL = "https://hub.test";
 const { createWorker } = await import("../worker/worker.ts");
 const { HubError } = await import("../protocol/client.ts");
+const { saveUsage } = await import("../worker/usage.ts");
 
 // An adapter with a session: it answers with what the script printed, and takes `resume` so a test can see it was asked.
 mkdirSync(join(home, "plugins", "scripted"), { recursive: true });
@@ -38,11 +50,81 @@ export default {
   read(stdout, code, stderr) {
     const session = /session=(\\S+)/.exec(stdout)?.[1];
     const finished = stdout.includes("TURN-OVER");
-    if (code === null) return { session, finished };
-    if (code !== 0) return { session, error: stderr.trim() || "boom" };
-    return { text: stdout.replace(/session=\\S+\\n/, "").replace("TURN-OVER\\n", ""), session, finished, usage: { input: 1, output: 1 } };
+    const started = stdout.includes("TURN-BEGAN");
+    if (code === null) return { session, finished, started };
+    if (code !== 0) return { session, started, error: stderr.trim() || "boom" };
+    const text = stdout.replace(/session=\\S+\\n/, "").replace("TURN-OVER\\n", "").replace("TURN-BEGAN\\n", "");
+    return { text, session, finished, started, usage: { input: 1, output: 1 } };
   },
   link: (s) => "app://" + s,
+};`,
+);
+
+// An adapter that can't make sense of anything it's given.
+mkdirSync(join(home, "plugins", "unreadable"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "unreadable", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read() { throw new Error("no idea what this says"); },
+  link: (s) => "app://" + s,
+};`,
+);
+
+// One that reads the session its CLI made up while the run goes, then can't read the end of it.
+mkdirSync(join(home, "plugins", "reads-then-not"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "reads-then-not", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read(out, code) {
+    if (code === null) return { session: "the-real-one" };
+    throw new Error("can't read it now");
+  },
+  link: (s) => "app://" + s,
+};`,
+);
+
+// One that takes its output to be JSON, as a plugin easily might.
+mkdirSync(join(home, "plugins", "naive"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "naive", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0], "naive", t.resume ?? "", t.session],
+  read(out, code, err) {
+    if (code !== null && code !== 0) return { error: err.trim() || "boom" };
+    return JSON.parse(out);
+  },
+  link: (s) => "app://" + s,
+};`,
+);
+
+// Has sessions to go on in, but nothing a person can open.
+mkdirSync(join(home, "plugins", "no-link"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "no-link", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0], "no-link", t.resume ?? "", t.prompt],
+  read(stdout, code) {
+    const session = /session=(\\S+)/.exec(stdout)?.[1];
+    if (code === null) return { session };
+    return { text: stdout.replace(/session=\\S+\\n/, ""), session, started: true };
+  },
+};`,
+);
+
+// One that gives back nothing at all.
+mkdirSync(join(home, "plugins", "silent"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "silent", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read() {},
 };`,
 );
 
@@ -442,6 +524,21 @@ test("a receipt that can't be read is asked for again in the same session, doing
   assert.deepEqual(hub.results[0].usage, { input: 2, output: 2 }, "both turns count; no turn reported a price");
 });
 
+test("a plugin with sessions and nothing to open gets to rewrite its receipt too", async () => {
+  const hub = fakeHub();
+  const wrong = said("no-link-wrong", `session=s-2\n做完了\n\n${FENCE}agent-autoloop\n{ 不是 json\n${FENCE}\n`);
+  const right = said(
+    "no-link-right",
+    `session=s-2\n做完了\n\n${FENCE}agent-autoloop\n{"notice":[{"title":"看一眼","text":"这个"}]}\n${FENCE}\n`,
+  );
+  const script = `if [ -n "$1" ]; then cat "${right}"; exit 0; fi; echo did-it >> "${folder}/no-link-work.txt"; cat "${wrong}"`;
+  hub.jobs.push(job({ use: "no-link", command: [script] }));
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.equal(readFileSync(join(folder, "no-link-work.txt"), "utf8"), "did-it\n", "the work was done once");
+  assert.deepEqual(hub.results[0].notice, [{ title: "看一眼", text: "这个" }]);
+});
+
 for (const failure of ["exit", "timeout", "unreadable", "empty", "failed-message"] as const) {
   test(`a ${failure} receipt repair keeps the original completed business result`, async () => {
     const hub = fakeHub();
@@ -530,6 +627,45 @@ test("a session that can't be gone on in starts a new one, once", async () => {
   assert.deepEqual([failing.results[0].outcome, failing.results[0].error], ["failed", "nope"]);
 });
 
+test("a turn that went on in its session and then broke stays there, and its prompt isn't run again", async () => {
+  // A new session would finish happily, doing the work a second time: only the launch count and the result can tell.
+  const attempt = (name: string, broken: string) => {
+    const launches = join(folder, `${name}.launches`);
+    const script = `echo x >>"${launches}"; if [ -z "$1" ]; then printf 'session=new\\n又做了一遍\\n'; exit 0; fi; printf 'session=old\\nTURN-BEGAN\\n'; ${broken}`;
+    return { given: job({ use: "scripted", command: [script], session: "old" }), launches };
+  };
+  const expect = (hub: ReturnType<typeof fakeHub>, launches: string, error: string) => {
+    assert.deepEqual([hub.results[0].outcome, hub.results[0].error, hub.results[0].session], ["failed", error, "old"]);
+    assert.equal(readFileSync(launches, "utf8"), "x\n", "launched once");
+  };
+
+  const broke = fakeHub();
+  const crash = attempt("broke", 'echo "连接断了" >&2; exit 1');
+  broke.jobs.push(crash.given);
+  const b = worker(broke);
+  await until(b, () => broke.results.length === 1);
+  expect(broke, crash.launches, "连接断了");
+
+  const silent = fakeHub();
+  const quiet = attempt("silent", "exit 0");
+  silent.jobs.push(quiet.given);
+  const s = worker(silent);
+  await until(s, () => silent.results.length === 1);
+  expect(silent, quiet.launches, "没留下结果");
+
+  const vanished = fakeHub();
+  const { hold } = gate("vanished");
+  // The hub hears of the session as soon as it's launched, so that doesn't say the script has got as far as starting.
+  const going = join(folder, "vanished.going");
+  const lost = attempt("vanished", `touch "${going}"; ${hold}`);
+  vanished.jobs.push(lost.given);
+  const v = worker(vanished);
+  await until(v, () => existsSync(going));
+  process.kill(-v.entries()[0].pid!, "SIGKILL");
+  await until(v, () => vanished.results.length === 1);
+  expect(vanished, lost.launches, "没留下结果");
+});
+
 test("the session is told to the hub while it runs, with its link", async () => {
   const hub = fakeHub();
   const { hold, open } = gate("session");
@@ -591,3 +727,344 @@ test("the hub gone for ten minutes is told once, tried a few times if telling fa
   for (let i = 0; i < 8; i++) await f.tick();
   assert.equal(readFileSync(attempts, "utf8").trim().split("\n").length, 5);
 });
+
+// An adapter that says what its script prints.
+mkdirSync(join(home, "plugins", "printed"), { recursive: true });
+writeFileSync(
+  join(home, "plugins", "printed", "agent.ts"),
+  `
+export default {
+  command: (t) => ["/bin/sh", "-c", t.command[0]],
+  read: (stdout, code) => (code === null || !stdout.trim() ? {} : { text: "好了", ...JSON.parse(stdout) }),
+};`,
+);
+const printing = (session: string, resumed: boolean, reading: object) =>
+  job({
+    use: "printed",
+    ...(resumed && { session }),
+    command: [`echo '${JSON.stringify({ session, ...reading })}'`],
+  });
+
+test("session totals are counted once across resumed jobs and worker restarts", async () => {
+  const hub = fakeHub();
+  const total = (sessionUsage: object, resumed = true) => printing("totals", resumed, { sessionUsage });
+  hub.jobs.push(total({ input: 52968, output: 126, cached: 26240 }, false));
+  await until(worker(hub), () => hub.results.length === 1);
+  hub.jobs.push(total({ input: 108943, output: 207, cached: 80384 }));
+  await until(worker(hub), () => hub.results.length === 2);
+  assert.deepEqual(
+    hub.results.map((r) => r.usage),
+    [
+      { input: 52968, output: 126, cached: 26240 },
+      { input: 55975, output: 81, cached: 54144 },
+    ],
+  );
+  assert.equal(
+    hub.results.reduce((n, r) => n + r.usage.input + r.usage.output, 0),
+    109150,
+  );
+  // An upgrade or a different worker may have no baseline for an existing session.
+  rmSync(join(home, "worker", "usage"), { recursive: true });
+  hub.jobs.push(total({ input: 110000, output: 220, cached: 81000 }));
+  await until(worker(hub), () => hub.results.length === 3);
+  assert.equal(hub.results[2].usage, undefined);
+  hub.jobs.push(total({ input: 110100, output: 230, cached: 81050 }));
+  await until(worker(hub), () => hub.results.length === 4);
+  assert.deepEqual(hub.results[3].usage, { input: 100, output: 10, cached: 50 });
+});
+
+test("a price given for the session and tokens given for the launch each count once", async () => {
+  const hub = fakeHub();
+  const turn = (cached: number, cost: number, resumed = true) =>
+    printing("mixed", resumed, { usage: { input: 2, output: 3, cached }, sessionUsage: { cost } });
+  hub.jobs.push(turn(33335, 0.25, false));
+  await until(worker(hub), () => hub.results.length === 1);
+  hub.jobs.push(turn(33690, 0.75));
+  await until(worker(hub), () => hub.results.length === 2);
+  assert.deepEqual(
+    hub.results.map((r) => r.usage),
+    [
+      { input: 2, output: 3, cached: 33335, cost: 0.25 },
+      { input: 2, output: 3, cached: 33690, cost: 0.5 },
+    ],
+  );
+  rmSync(join(home, "worker", "usage"), { recursive: true });
+  hub.jobs.push(turn(34000, 1));
+  await until(worker(hub), () => hub.results.length === 3);
+  assert.deepEqual(hub.results[2].usage, { input: 2, output: 3, cached: 34000 }, "only the price can't be known");
+});
+
+test("a launch read again after a restart subtracts where it began, not where the session has got to", async () => {
+  const hub = fakeHub();
+  const { hold, open } = gate("usage-restart");
+  saveUsage("printed", "reread", { input: 100 });
+  const reading = JSON.stringify({ session: "reread", sessionUsage: { input: 150 } });
+  hub.jobs.push(job({ use: "printed", session: "reread", command: [`${hold}; echo '${reading}'`] }));
+  await worker(hub).tick();
+  // As after a worker that stopped once it had moved the session on, before the result was out.
+  saveUsage("printed", "reread", { input: 150 });
+  open();
+  await until(worker(hub), () => hub.results.length === 1);
+  assert.deepEqual(hub.results[0].usage, { input: 50 });
+});
+
+test("a plugin that can't read what it printed fails that run alone, once it has ended, in the session it was in", async () => {
+  const hub = fakeHub();
+  const lines: string[] = [];
+  const held = gate("unreadable");
+  const launches = join(folder, "unreadable-launches");
+  const stuck = job({ use: "unreadable", session: "the-old-one", command: [`echo x >> "${launches}"; ${held.hold}`] });
+  const other = job();
+  hub.jobs.push(stuck, other);
+  const w = worker(hub, { log: (line: string) => lines.push(line) });
+  await until(w, () => Boolean(resultOf(hub, other)));
+  assert.equal(resultOf(hub, stuck), undefined, "still going, so not ended");
+  held.open();
+  await until(w, () => Boolean(resultOf(hub, stuck)));
+  const result = resultOf(hub, stuck);
+  assert.equal(result.outcome, "failed");
+  assert.match(result.error, /读不懂/);
+  assert.equal(result.session, "the-old-one");
+  assert.equal(readFileSync(launches, "utf8"), "x\n", "its prompt isn't run again");
+  assert.equal(lines.filter((line) => line.includes("no idea what this says")).length, 1, "and it's said once");
+});
+
+test("a plugin that can't read what it printed doesn't start a vanished run again either", async () => {
+  const hub = fakeHub();
+  const held = gate("unreadable-vanished");
+  const launches = join(folder, "unreadable-vanished-launches");
+  const going = join(folder, "unreadable-vanished-going");
+  const script = `echo x >> "${launches}"; touch "${going}"; ${held.hold}`;
+  hub.jobs.push(job({ use: "unreadable", session: "the-old-one", command: [script] }));
+  const w = worker(hub);
+  await until(w, () => existsSync(going));
+  process.kill(-w.entries()[0].pid!, "SIGKILL");
+  await until(w, () => hub.results.length === 1);
+  assert.deepEqual([hub.results[0].outcome, hub.results[0].session], ["failed", "the-old-one"]);
+  assert.match(hub.results[0].error, /读不懂/);
+  assert.equal(readFileSync(launches, "utf8"), "x\n", "its prompt isn't run again");
+});
+
+test("a session read while the run went is what's handed in when the end can't be read", async () => {
+  const hub = fakeHub();
+  const held = gate("real-session");
+  hub.jobs.push(job({ use: "reads-then-not", command: [held.hold] }));
+  const w = worker(hub);
+  await until(w, () => hub.starts.some((start) => start.session === "the-real-one"));
+  held.open();
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "failed");
+  assert.match(hub.results[0].error, /读不懂/);
+  assert.equal(hub.results[0].session, "the-real-one");
+});
+
+test("a session read while the run went is handed in even if the hub couldn't be told of it", async () => {
+  const hub = fakeHub();
+  hub.started = async () => {
+    throw new Error("network down");
+  };
+  const held = gate("real-session-untold");
+  hub.jobs.push(job({ use: "reads-then-not", command: [held.hold] }));
+  const w = worker(hub);
+  await until(w, () => w.entries()[0]?.session === "the-real-one");
+  held.open();
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].session, "the-real-one");
+});
+
+test("a new session whose output can't be read hands in that session, not the one it couldn't go on in", async () => {
+  // Handing in the old one, the retry can't go on in it either, opens another new session and does the work a second time.
+  const hub = fakeHub();
+  const held = gate("told-old");
+  const fresh = join(folder, "told-old.session");
+  const script = `if [ -n "$1" ]; then ${held.hold}; echo gone >&2; exit 1; fi; echo "$2" > "${fresh}"; echo not json`;
+  hub.jobs.push(job({ use: "naive", session: "old", command: [script] }));
+  const w = worker(hub);
+  await until(w, () => hub.starts.some((start) => start.session === "old"));
+  held.open();
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "failed");
+  assert.equal(hub.results[0].session, readFileSync(fresh, "utf8").trim());
+});
+
+test("a plugin that gives back nothing fails that run and doesn't hold it", async () => {
+  const hub = fakeHub();
+  hub.jobs.push(job({ use: "silent", command: ["echo hi"] }));
+  const w = worker(hub);
+  await until(w, () => hub.results.length === 1);
+  assert.equal(hub.results[0].outcome, "failed");
+  assert.match(hub.results[0].error, /读不懂/);
+});
+
+test("trouble with one run waits for the next round and holds up no other", async () => {
+  const hub = fakeHub();
+  const lines: string[] = [];
+  const troubled = job();
+  hub.jobs.push(troubled);
+  const w = worker(hub, { log: (line: string) => lines.push(line) });
+  await w.tick();
+  const dir = join(home, "worker", "runs", `${troubled.run}-1`);
+  const end = Date.now() + 15_000;
+  while (!existsSync(join(dir, "exit-1"))) {
+    if (Date.now() > end) assert.fail("timed out waiting");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  chmodSync(dir, 0o500);
+  try {
+    const other = job();
+    hub.jobs.push(other);
+    await until(w, () => Boolean(resultOf(hub, other)));
+    if (process.getuid!() !== 0) {
+      assert.equal(resultOf(hub, troubled), undefined);
+      const troubles = () => lines.filter((line) => line.includes(`run ${troubled.run}:`) && line.includes("EACCES"));
+      assert.equal(troubles().length, 1);
+      await w.tick();
+      await w.tick();
+      assert.equal(troubles().length, 1, "said once, however long it lasts");
+    }
+  } finally {
+    chmodSync(dir, 0o700);
+  }
+  await until(w, () => Boolean(resultOf(hub, troubled)));
+  assert.equal(resultOf(hub, troubled).outcome, "done");
+});
+
+/** A stand-in ACP agent the real bridge runs. Each launch adds a line to a file, for counting and for what it does next. */
+function acp(name: string, script: string) {
+  const launches = join(folder, `${name}.launches`);
+  const program = acpAgent(
+    folder,
+    name,
+    `appendFileSync(${JSON.stringify(launches)}, 'x\\n');
+const launch = readFileSync(${JSON.stringify(launches)}, 'utf8').trim().split('\\n').length;
+${script}`,
+  );
+  return {
+    command: [process.execPath, program],
+    launches: () => readFileSync(launches, "utf8").trim().split("\n").length,
+  };
+}
+
+test("over ACP, a retry that breaks before its prompt stays in the session its work may have been done in", async () => {
+  for (const [name, script] of [
+    ["exits-first", "if (launch === 1) process.exit(3);"],
+    [
+      "initialize-fails-first",
+      "if (launch === 1) on.initialize = (m) => send({ id: m.id, error: { code: -32603, message: '初始化坏了' } });",
+    ],
+  ] as const) {
+    const hub = fakeHub();
+    const agent = acp(name, script);
+    hub.jobs.push(job({ use: "acp", session: "S1", command: agent.command }));
+    const w = worker(hub);
+    await until(w, () => hub.results.length === 1);
+    assert.equal(hub.results[0].outcome, "failed", name);
+    assert.equal(hub.results[0].session, "S1", name);
+    assert.equal(agent.launches(), 1, `${name}: a new session would do the work again`);
+  }
+});
+
+test("over ACP, a session something else has open stays, and the run goes back to be tried there again", async () => {
+  const hub = fakeHub();
+  const agent = acp(
+    "in-use",
+    `on['session/load'] = (m) => send({ id: m.id, error: { code: -32600, message: '这个会话正在别处打开，关掉后再试', data: { reason: 'thread_active_writer' } } });`,
+  );
+  hub.jobs.push(job({ use: "acp", session: "S1", command: agent.command }));
+  await until(worker(hub), () => hub.results.length === 1);
+  assert.deepEqual(
+    [hub.results[0].outcome, hub.results[0].error, hub.results[0].session],
+    ["failed", "这个会话正在别处打开，关掉后再试", "S1"],
+  );
+  assert.equal(agent.launches(), 1, "a new session would do the work again");
+});
+
+test("over ACP, a session the agent refuses or can't go on in gets a new one, once", async () => {
+  for (const [name, script] of [
+    [
+      "refuses-load",
+      "on['session/load'] = (m) => send({ id: m.id, error: { code: -32002, message: '没有这个会话' } });",
+    ],
+    [
+      "cannot-resume",
+      "if (launch === 1) on.initialize = (m) => send({ id: m.id, result: { protocolVersion: 1, agentCapabilities: {} } });",
+    ],
+  ] as const) {
+    const hub = fakeHub();
+    const agent = acp(name, script);
+    hub.jobs.push(job({ use: "acp", session: "S1", command: agent.command }));
+    const w = worker(hub);
+    await until(w, () => hub.results.length === 1);
+    assert.deepEqual(
+      [hub.results[0].outcome, hub.results[0].summary, hub.results[0].session],
+      ["done", "做完了", "agent-session"],
+      name,
+    );
+    assert.equal(agent.launches(), 2, name);
+  }
+});
+
+test("over ACP, a last message after a finished tool call is read by itself, so the run goes back to be tried again", async () => {
+  const hub = fakeHub();
+  const agent = acp(
+    "failed-after-a-tool",
+    `on['session/prompt'] = (m) => {
+      update({ sessionUpdate: 'tool_call', toolCallId: 't', title: '后台任务', status: 'in_progress' });
+      say('还在等后台任务');
+      update({ sessionUpdate: 'tool_call_update', toolCallId: 't', status: 'failed' });
+      say('没跑成：网络断了');
+      send({ id: m.id, result: { stopReason: 'end_turn' } });
+    };`,
+  );
+  hub.jobs.push(job({ use: "acp", command: agent.command }));
+  await until(worker(hub), () => hub.results.length === 1);
+  assert.deepEqual([hub.results[0].outcome, hub.results[0].error], ["failed", "网络断了"]);
+});
+
+/** Whether anything in a run's process group is still going. Zombies have already stopped. */
+const groupGoing = (pid: number) =>
+  execFileSync("ps", ["-ax", "-o", "pgid=", "-o", "stat="], { encoding: "utf8" })
+    .trim()
+    .split("\n")
+    .some((line) => {
+      const [group, state] = line.trim().split(/\s+/);
+      return Number(group) === pid && !state.startsWith("Z");
+    });
+
+const STUBBORN = "process.on('SIGTERM', () => {}); setTimeout(() => process.exit(0), 30_000);";
+for (const [what, script, why] of [
+  [
+    "won't go",
+    `${STUBBORN} on['session/prompt'] = (m) => send({ id: m.id, result: { stopReason: 'max_tokens' } });`,
+    /max_tokens/,
+  ],
+  [
+    "left something holding its output",
+    `on['session/prompt'] = () => { spawn('sleep', ['30'], { stdio: 'inherit' }); process.exit(9); };`,
+    /退出：9/,
+  ],
+  ["closed its output and stayed", `${STUBBORN} on['session/prompt'] = () => closeSync(1);`, /关掉了输出/],
+] as const) {
+  test(`over ACP, a failed turn whose agent ${what} is ended after a while, with the real reason`, async () => {
+    const hub = fakeHub();
+    let clock = Date.now();
+    const agent = acp(what.replaceAll(" ", "-"), script);
+    // A limit far off, by a clock that stands still until it's moved: it's what ends such a run if nothing else does.
+    hub.jobs.push(job({ use: "acp", command: agent.command, timeout: 180 }));
+    const w = worker(hub, { now: () => clock });
+    await until(w, () => Boolean(w.entries()[0]?.finishedAt));
+    const pid = w.entries()[0].pid!;
+    await w.tick();
+    assert.equal(hub.results.length, 0, "it gets a while to go by itself");
+    clock += 31_000;
+    await until(
+      w,
+      () => hub.results.length === 1,
+      () => (clock += 1000),
+    );
+    assert.equal(hub.results[0].outcome, "failed");
+    assert.match(hub.results[0].error, why);
+    assert.equal(hub.results[0].session, "agent-session");
+    assert.equal(groupGoing(pid), false, "and nothing of it is left");
+  });
+}

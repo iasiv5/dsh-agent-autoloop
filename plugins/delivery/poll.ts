@@ -10,13 +10,13 @@ export async function poll(repo: string) {
       if (!issue.pull_request && issue.state !== "open") continue;
       const events = pages(repo, `issues/${issue.number}/events?per_page=100`);
       const marked = events.filter((event) => event.event === "labeled" && event.label?.name === label).at(-1);
-      if (!marked) throw new Error(`找不到事项 ${issue.number} 的标签记录`);
       const pr = issue.pull_request ? await api(`pulls/${issue.number}`) : null;
       if (pr?.state === "closed" && !pr.merged_at) continue;
       rows.push({
         number: issue.number,
         head: pr?.head.sha ?? "",
-        labelEvent: marked.id,
+        // One item without a readable record must not hold up the others.
+        labelEvent: marked?.id ?? 0,
         kind: pr ? "pull_request" : "issues",
       });
     }

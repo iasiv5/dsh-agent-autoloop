@@ -1,19 +1,19 @@
 // The parameterized hub core: a database, the view kept from the log, the rules source, and one way to apply an
 // input. Both shells instantiate it — the standalone CLI (host/runtime.ts) with its HOME and watched rules file, the
-// DSH plugin (dsh/) with its profile data dir and inline trusted rules. All behavior lives here so the two shells
-// cannot drift. Importing createHub is side-effect free; calling it opens the database.
+// DSH plugin (dsh/) with its profile data dir and inline trusted rules. The behavior is written here once, so the two
+// shells cannot drift. Importing createHub is side-effect free; calling it opens the database.
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { DatabaseSync, type SQLInputValue } from "node:sqlite";
-import { credential, digest, whose as keyHolder } from "../kernel/credentials.ts";
+import { stateOf as state, viewStatements } from "./state.ts";
+import { cardHash, digest, whose as keyHolder } from "../kernel/credentials.ts";
 import { decide } from "../kernel/decide.ts";
 import { AuthError, NotFound } from "../kernel/errors.ts";
-import { evolve, rows, keyOf, statement, type Fact, type Row, type Table } from "../kernel/evolve.ts";
+import { initialize, rows, statement, type Fact, type Row, type Table } from "../kernel/evolve.ts";
 import * as query from "../kernel/query.ts";
 import { eventRule, typeMatches, type Rules } from "../kernel/rules.ts";
-import { stateOf as state } from "../kernel/state.ts";
-import { commit, openView } from "../kernel/store.ts";
+import { commitLatest, openView } from "../kernel/store.ts";
 import type { Job } from "../protocol/job.ts";
 import { parseRules as checkRules, RulesError } from "../protocol/rules.ts";
 import type { Rejected } from "../protocol/validate.ts";
@@ -44,51 +44,40 @@ export function createHub(options: HubOptions) {
   if (!existsSync(masterKeyFile)) {
     writeFileSync(masterKeyFile, randomBytes(32).toString("base64url"), { mode: 0o600, flag: "wx" });
   }
-  const environment = {
-    secret: readFileSync(masterKeyFile, "utf8").trim(),
-    publicUrl: options.publicUrl ?? "",
-  };
+  const masterKey = readFileSync(masterKeyFile, "utf8").trim();
+  // An empty or cut-short key would still sign links, and card links derive from what channels see. Replacing it would
+  // void every link and token, so that is left to the owner.
+  if (!/^[A-Za-z0-9_-]{43}$/.test(masterKey)) {
+    throw new Error(
+      `${masterKeyFile} 坏了（应该是 43 个字符），中台不启动。从备份恢复这个文件；没有备份就删掉它，` +
+        "重启会生成新的，但已经发出的卡片链接和正在跑的轮次会失效。",
+    );
+  }
+  const environment = { secret: masterKey, publicUrl: options.publicUrl ?? "" };
 
   const db = new DatabaseSync(join(home, "hub.db"));
   db.exec("PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL; PRAGMA busy_timeout=5000;");
-  if (db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='events'").get()) {
-    throw new Error("这是旧版数据库；本轮未提供导入工具，请使用新的 AGENT_AUTOLOOP_HOME");
-  }
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS facts(seq INTEGER PRIMARY KEY, fact TEXT NOT NULL);
-    CREATE TABLE IF NOT EXISTS projections(collection TEXT, key TEXT, data TEXT NOT NULL, PRIMARY KEY(collection, key));
-  `);
-  db.function("card_token", { deterministic: true }, (id, at) => credential(environment, "card", id, at));
-  db.function("card_hash", { deterministic: true }, (id, at) => digest(credential(environment, "card", id, at)));
-
-  const schema = readFileSync(new URL("../kernel/schema.sql", import.meta.url), "utf8");
-  const views: string[] = [];
-  for (const [, table, body] of schema.matchAll(/CREATE TABLE (\w+) \(([\s\S]*?)\n\);/g)) {
-    const columns = [...body.matchAll(/^  (\w+) (?:INTEGER|TEXT)/gm)].map(([, column]) => column);
-    const selected = columns.map((column) =>
-      column === "token"
-        ? "card_token(json_extract(data,'$.id'),json_extract(data,'$.created_at')) AS token"
-        : `json_extract(data,'$.${column}') AS ${column}`,
-    );
-    views.push(
-      `DROP VIEW IF EXISTS ${table}; CREATE VIEW ${table} AS SELECT ${selected.join(",")} FROM projections WHERE collection='${table}'`,
-    );
-  }
+  db.function("card_hash", { deterministic: true }, (id, at) => cardHash(environment, id, at));
+  initialize(db);
 
   // Other processes must see either the old views or the new ones, never the gap between DROP and CREATE.
-  db.exec(`BEGIN IMMEDIATE; ${views.join(";")}; COMMIT`);
+  db.exec(`BEGIN IMMEDIATE; ${viewStatements.join(";")}; COMMIT`);
 
-  // The persisted projection is expendable; the log alone rebuilds it. The fingerprint covers the code that defines
-  // the projection's shape, so a shell swap reuses it and a semantic change rebuilds once from the log.
+  const CARD_HASH_INDEX =
+    "CREATE INDEX IF NOT EXISTS projection_card_hash ON projections(card_hash(json_extract(data,'$.id'),json_extract(data,'$.created_at'))) WHERE collection='cards'";
+
+  // The persisted projection is expendable; the log alone rebuilds it, which an upgrade has to wait for. Only the files
+  // that decide what's stored count here, whole. Both shells compute this fingerprint from the same sources, so either
+  // one can reuse the other's projection.
   const format = digest(
-    ["../kernel/evolve.ts", "../kernel/schema.sql", "../kernel/credentials.ts", "./hub.ts"]
+    ["../kernel/evolve.ts", "../kernel/credentials.ts"]
       .map((file) => readFileSync(new URL(file, import.meta.url), "utf8"))
-      .join("\n") + digest(environment.secret),
+      .join("\n") +
+      CARD_HASH_INDEX +
+      digest(environment.secret),
   );
   let current = openView(db, format);
-  db.exec(
-    "CREATE INDEX IF NOT EXISTS projection_card_hash ON projections(card_hash(json_extract(data,'$.id'),json_extract(data,'$.created_at'))) WHERE collection='cards'",
-  );
+  db.exec(CARD_HASH_INDEX);
 
   const all = <T>(sql: string, params: SQLInputValue[] = []) =>
     db
@@ -112,11 +101,11 @@ export function createHub(options: HubOptions) {
     return () => listeners.delete(listener);
   };
 
+  // The view is read inside the write lock, so a command and a shell's own writes never decide on a stale view.
   function execute(type: string, args: any[], now = Date.now()) {
     let facts: Fact[] = [];
     let value: any;
-    const latest = getView();
-    current = commit(db, latest, () => {
+    current = commitLatest(db, format, (latest) => {
       ({ facts, value } = decide(latest, { type, args }, now, environment));
       return facts;
     });
@@ -127,20 +116,28 @@ export function createHub(options: HubOptions) {
   const parseRules = (json: string, now = Date.now()) =>
     checkRules(json, now, Intl.DateTimeFormat().resolvedOptions().timeZone);
   const currentRules = () => query.configuration(getView());
-  let loaded = { file: "", mtime: 0 };
 
-  function reloadRules(file: string): { changed: boolean; problem?: string } {
-    const mtime = statSync(file).mtimeMs;
-    if (loaded.file === file && loaded.mtime === mtime) return { changed: false };
-    loaded = { file, mtime };
+  function unreadable(file: string, error: NodeJS.ErrnoException) {
+    if (error.code === "ENOENT") return `找不到 ${file}，被删掉或移走了？放回去就会接着用`;
+    if (error.code === "EACCES" || error.code === "EPERM") return `没有权限读 ${file}，改回能读的权限就会接着用`;
+    return `读不到 ${file}：${error.code ?? error.message}`;
+  }
+
+  function reloadRules(file: string): { problem?: string } {
+    let text: string;
     try {
-      const next = parseRules(readFileSync(file, "utf8"));
+      text = readFileSync(file, "utf8");
+    } catch (error) {
+      return { problem: unreadable(file, error as NodeJS.ErrnoException) };
+    }
+    try {
+      const next = parseRules(text);
       const differs = JSON.stringify(next) !== JSON.stringify(currentRules());
       const reportedBroken = (card: Row) => card.key.startsWith("rules:") && card.state === "open";
       if (differs || rows(current, "cards", { state: "open" }).some(reportedBroken)) execute("rules", [next]);
-      return { changed: true };
+      return {};
     } catch (error) {
-      if (error instanceof RulesError) return { changed: false, problem: error.message };
+      if (error instanceof RulesError) return { problem: error.message };
       throw error;
     }
   }
@@ -157,14 +154,26 @@ export function createHub(options: HubOptions) {
     throw new Error("缺少规则");
   }
 
-  const ruleNamed = (name: string) => currentRules()?.rules.find((rule) => rule.name === name);
+  let toldOf: string | undefined;
+
+  function tick(now = Date.now()) {
+    if (options.rulesFile) {
+      const { problem } = reloadRules(options.rulesFile);
+      // A file still gone or still wrong is a problem at every tick, and an owner who closed the card has heard.
+      if (problem && problem !== toldOf) execute("rulesError", [problem], now);
+      toldOf = problem;
+    }
+    execute("tick", [], now);
+  }
+
+  const ruleNamed = (name: string) => currentRules().rules.find((rule) => rule.name === name);
   const rulesFor = (source: string, type: string) =>
-    (currentRules()?.rules ?? []).filter(
+    currentRules().rules.filter(
       (rule) => eventRule(rule) && rule.when.source === source && typeMatches(rule.when.types, type),
     );
-  const workers = () => [...new Set(Object.values(currentRules()?.agents ?? {}).map((agent) => agent.worker))];
+  const workers = () => [...new Set(Object.values(currentRules().agents).map((agent) => agent.worker))];
   const agentsOf = (worker: string) => query.agentsOf(getView(), worker);
-  const limitOf = (group: string) => currentRules()?.rules.find((rule) => rule.group === group)?.parallel ?? 1;
+  const limitOf = (group: string) => currentRules().rules.find((rule) => rule.group === group)?.parallel ?? 1;
 
   const ingest = (source: string, input: unknown, now = Date.now()): EventAck =>
     execute("ingest", [source, input], now);
@@ -179,14 +188,6 @@ export function createHub(options: HubOptions) {
   const cancel = (run: number, now = Date.now()) => execute("cancel", [run], now);
   const cancels = (worker: string) => query.cancels(getView(), worker);
   const sweep = (now = Date.now()) => execute("sweep", [], now);
-
-  function tick(now = Date.now()) {
-    if (options.rulesFile) {
-      const { problem } = reloadRules(options.rulesFile);
-      if (problem) execute("rulesError", [problem], now);
-    }
-    execute("tick", [], now);
-  }
 
   const createCard = (spec: Row, now = Date.now()) => execute("createCard", [spec], now);
   const tell = (key: string, title: string, text: string, now = Date.now()): CardAck =>
@@ -212,7 +213,7 @@ export function createHub(options: HubOptions) {
 
   function cardAtLink(token: string) {
     const card = cardByToken(token);
-    if (!card || !Object.values(currentRules()?.channels ?? {}).some((channel) => channel.links))
+    if (!card || !Object.values(currentRules().channels).some((channel) => channel.links))
       throw new NotFound("没有这张卡片");
     return card;
   }
@@ -227,8 +228,7 @@ export function createHub(options: HubOptions) {
 
   const view = (card: Row, ref: string | null = null, links = false) => query.cardView(card, environment, ref, links);
   const unrouted = (limit = 20) => query.unrouted(getView(), limit);
-  const stateOf = (now = Date.now(), before?: number) =>
-    state(now, before, query.configuration(getView()), { all, view, unrouted });
+  const stateOf = (now = Date.now(), before?: number) => state(now, before, currentRules(), { all, view, unrouted });
 
   const keepKeyHash = (kind: KeyKind, name: string, hash: string, now = Date.now()) =>
     execute("key", [kind, name, hash], now);
@@ -294,7 +294,7 @@ export function createHub(options: HubOptions) {
     execute,
     parseRules,
     get rules() {
-      return query.configuration(getView());
+      return currentRules();
     },
     reloadRules,
     ruleNamed,

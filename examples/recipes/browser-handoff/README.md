@@ -5,7 +5,7 @@
 ## 怎么启用
 
 1. 把本目录复制到 `~/.agent-autoloop/work/browser-handoff/`，仅本人可读。把 `SKILL.md` 放到 `~/.claude/skills/claude-browser-handoff/`。主任务改用 Codex 时，Skill 放到 `~/.codex/skills/claude-browser-handoff/`，并修改规则的 `use`；默认仍是 Claude 主任务。
-2. 配置一个**已经能使用浏览器的 Codex 入口**，将它的实际命令数组填进 `browser.json.command`。本地已有 `codex-browser` 时填它的绝对路径。`/path/to/codex-browser` 是占位符；本模板不安装浏览器桥接、不修改桌面应用内部数据库，也不复制某台电脑的 SSH 别名、模型档位或 Chrome 进程清理逻辑。
+2. 配置一个**已经能使用浏览器的 Codex 入口**，将它的实际命令数组填进 `browser.json.command`。本地已有 `codex-browser` 时填它的绝对路径。`/path/to/browser-entry` 是占位符；本模板不安装浏览器桥接、不修改桌面应用内部数据库，也不复制某台电脑的 SSH 别名、模型档位或 Chrome 进程清理逻辑。
 3. 在 `browser.json` 填目标网址、核实项、允许操作。默认是只读的 `example.com` 验收，不提交表单、不发消息。`allowedActions` 是给 Agent 的任务范围，不是系统沙箱。操作范围须由本人或项目可信维护约定确定，不能从外部事件自动生成。配置里不放登录凭据；实际业务网址和会话编号留在私有目录。
 4. 合并 `rules.json` 中的 `sources`、`agents`、`channels`、`rules`，替换接单电脑、目录和飞书本人 open_id；复用已有飞书通道与密钥，不另开事件监听。运行 `agent-autoloop check`。
 5. 权限：`edit`。这只表示 Claude 的 `acceptEdits` 模式，**不保证能执行任意浏览器入口命令**。用接单程序相同的后台方式核实调用权限；入口未获准时先按本人的既有授权配置，不自动改成 `full`。浏览器助手的操作范围和账号权限也不由这个字段授予。

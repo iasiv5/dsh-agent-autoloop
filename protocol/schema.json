@@ -163,6 +163,9 @@
         "key": {
           "type": "string",
           "maxLength": 100
+        },
+        "fyi": {
+          "type": "boolean"
         }
       },
       "required": ["title", "text"],
@@ -336,7 +339,8 @@
           "minimum": 1
         },
         "ref": {
-          "type": ["string", "null"]
+          "type": ["string", "null"],
+          "maxLength": 500
         }
       },
       "required": ["version"],

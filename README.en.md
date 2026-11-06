@@ -22,9 +22,13 @@ Most of us use command-line agents like Claude Code or Codex by babysitting a te
 
 Works on macOS and Linux. You need Node 24, Git, curl, and at least one command-line agent already signed in; no GitHub account required. You can also hand the [installation guide](INSTALL.md) to your agent and let it install everything for you.
 
+> **Windows: pending.** Many of you have asked for a Windows version, and I've seen every request. I'm away on a work trip without a Windows machine, so I can't build or test it on real hardware, and it doesn't run on Windows yet. When I get home this weekend (November 7–8), I'll finish it, run compatibility tests, and then release it properly. Progress will be posted in [#17](https://github.com/KKKKhazix/agent-autoloop/issues/17). If you can't wait, WSL2 works for now; see [INSTALL](INSTALL.md) for what to expect.
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
 ```
+
+The installer and `agent-autoloop update` both install the newest [release](https://github.com/KKKKhazix/agent-autoloop/releases), which has passed every check.
 
 Then run a real loop with your own agent — ask, exit while it waits, make the call, resume:
 
@@ -32,21 +36,21 @@ Then run a real loop with your own agent — ask, exit while it waits, make the 
 agent-autoloop try
 ```
 
-> CLI output and default notification strings are currently in Chinese.
+> CLI output and default notification strings are still Chinese until they are translated. Sample CLI output in this README is that same text written in English.
 
-Here is the actual output from Codex in a non-interactive terminal:
+Here is the output from Codex in a non-interactive terminal, written in English:
 
 ```text
-事件发出去了，Agent 开始干活……
+Event sent. The agent is getting to work...
 
-Agent 结束了这一轮，问了你一个问题。它现在不占进程、不花 Token。
+The agent finished this round and asked you a question. No process is running for it now, and it is not spending tokens.
 
-【等你决定】#1 试跑：选一个颜色
-这是一次试跑，选哪个都行。
-  1. 蓝色
-  2. 绿色
-回答：agent-autoloop answer 1 <序号>
-答完运行 agent-autoloop status，能看到它接着把活干完。
+[Your call] #1 Try run: pick a color
+This is a try run. Either choice is fine.
+  1. Blue
+  2. Green
+Answer: agent-autoloop answer 1 <number>
+After you answer, run agent-autoloop status to see it pick the work back up and finish.
 ```
 
 In an interactive terminal, just type the option number. In a non-interactive terminal, run `agent-autoloop answer 1 2` to pick green. Then `agent-autoloop status` shows that the agent resumed its conversation and finished, along with rounds, tokens, and cost for today and the past seven days ([how they are counted](skills/agent-autoloop/SKILL.md#看情况回答)).
@@ -92,7 +96,7 @@ External events work the same way once the source is connected. To hand new GitH
 }
 ```
 
-Changes take effect within seconds of saving. Run `agent-autoloop check` to validate. If you make a mistake, the hub keeps running the previous valid rules and sends you a card pointing out the error.
+Changes take effect within seconds of saving. Run `agent-autoloop check` to validate, `agent-autoloop rules explain` to see the rules in effect and their next runs, and `agent-autoloop emit <type> --dry-run` to preview who an event would go to (it doesn't contact the hub or write to the log). If you make a mistake, or the file is deleted or can't be read, the hub keeps running the previous valid rules and sends you a card about it.
 
 ### How agents talk back to the hub
 
@@ -113,7 +117,7 @@ Order checked. We have enough stock in the warehouse.
 ```
 ````
 
-Besides `ask`, receipts can send notifications (`notice`), resolve open cards (`resolve`), schedule follow-up checks (`later`), and emit new events (`events`). If the JSON is invalid, the hub has the agent rewrite just that final message in the same session, without repeating completed work. If rewriting also fails, it keeps the original conclusion and tells you the receipt was not applied.
+Besides `ask`, receipts can send notifications (`notice`), resolve open cards (`resolve`), schedule follow-up checks (`later`), and emit new events (`events`). A notice asks for nothing, but you can add a line of your own when you settle one, and it stays on the card; one marked `fyi` is only there to tell you, and has no button. If the JSON is invalid, the hub has the agent rewrite just that final message in the same session, without repeating completed work. If rewriting also fails, it keeps the original conclusion and tells you the receipt was not applied (a plain command has no session, so it goes straight to this). Going on in an old session works the same way: a new session starts only when the old one can't be continued. If it was continued and then broke partway, the run counts as failed and is retried in that session a few minutes later, not redone in a new one. A new event on the same thread starts a new session by default; with `"resume": true` in the rule it goes on in the last round's session.
 
 ## Ready-to-use recipes
 
@@ -141,21 +145,21 @@ Built-in plugins ship with the program and are enabled through configuration. Us
 
 | Side | Built in | Setup |
 |---|---|---|
-| **Events**: how work is found | [GitHub Webhook](plugins/github/source.ts), [HTTP API](docs/protocol.md#来源把世界变成事件), [cron rules](skills/agent-autoloop/SKILL.md#改规则), [issue polling script](examples/watch-github-issues.sh) | [Guide](skills/agent-autoloop/SKILL.md#接一个事件插件) |
-| **Agents**: who does the work | [Claude Code](plugins/claude/agent.ts), [Codex](plugins/codex/agent.ts), [ACP](plugins/acp/agent.ts), [generic command](plugins/command/agent.ts) | [Guide](skills/agent-autoloop/SKILL.md#接一个-agent) |
+| **Events**: how work is found | [GitHub Webhook](plugins/github/source.ts), [GitLab Webhook](plugins/gitlab/source.ts), [HTTP API](docs/protocol.md#来源把世界变成事件), [cron rules](skills/agent-autoloop/SKILL.md#改规则), [issue polling script](examples/watch-github-issues.sh) | [Guide](skills/agent-autoloop/SKILL.md#接一个事件插件) |
+| **Agents**: who does the work | [Claude Code](plugins/claude/agent.ts), [Codex](plugins/codex/agent.ts), [ACP](plugins/acp/agent.ts), [DeepSeek Harness](plugins/dsh/agent.ts), [generic command](plugins/command/agent.ts) | [Guide](skills/agent-autoloop/SKILL.md#接一个-agent) |
 | **Channels**: how cards reach you | [Desktop notifications](plugins/desktop/channel.ts) (on by default), [Feishu](plugins/feishu/channel.ts), [DingTalk / WeCom / Slack / Discord](plugins/webhook/templates.ts) | [Guide](skills/agent-autoloop/SKILL.md#接一个通道) |
 | **Delivery**: CI/CD as a plugin | [`delivery`](plugins/delivery/delivery.ts) | [Guide](skills/agent-autoloop/SKILL.md#交付流水线) |
 
-**What has been tested:** Claude Code, Codex, and ACP (with the official Codex ACP adapter) have run multi-turn Q&A and session resumption across processes. Feishu has run real delivery, button callbacks, and card updates. The four webhook templates have only been checked against local mock servers. These text channels answer through a link, so `hub.publicUrl` must be reachable from your phone or computer.
+**What has been tested:** Claude Code, Codex, and ACP (with the official Codex ACP adapter) have run multi-turn Q&A and session resumption across processes. Feishu has run real delivery, button callbacks, and card updates. The four webhook templates have only been checked against local mock servers, and the GitLab webhook against the payloads in its docs, not a real GitLab. These text channels answer through a link, so `hub.publicUrl` must be reachable from your phone or computer.
 
 **Other CLI agents connect in one line.** Set `use: "command"` and pass a command array; `{prompt}` is a single argument, never evaluated as shell code. These commands come from each tool's official docs, and we have not run each of them yet:
 
 | Agent | Command |
 |---|---|
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cli-help.md#dsh-headless) | `dsh --profile headless {prompt}` |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cli-help.md#dsh-headless) older versions (the built-in plugin needs 0.2.2 or newer) | `dsh --profile headless {prompt}` |
 | [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/cli.md) | `pi --print {prompt}` |
 | [OpenClaw](https://docs.openclaw.ai/cli/agent) | `openclaw agent exec {prompt}` |
-| [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | `hermes chat -q {prompt}` |
+| [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | `hermes chat -Q -q {prompt}` |
 | [Cursor](https://cursor.com/docs/cli/reference/parameters) | `agent -p --trust {prompt}` |
 | [WorkBuddy / CodeBuddy](https://www.codebuddy.ai/docs/cli/headless) | `codebuddy -p {prompt}` |
 
@@ -184,16 +188,16 @@ Run these from `~/.agent-autoloop/app`:
 | The benchmarks below | `npm run benchmark` |
 
 ```text
-第 1 轮 · 演示
-11-03 20:47:25  规则版本 #1
-11-03 20:47:25  触发事件：来源 local · 类型 demo.start · 对象 example
-11-03 20:47:25  local 领取（演示程序）
-11-03 20:47:25  结束：演示完成
+Round 1 · Demo
+11-03 20:47:25  Rules version #1
+11-03 20:47:25  Triggering event: source local · type demo.start · subject example
+11-03 20:47:25  local picked it up (demo program)
+11-03 20:47:25  Finished: demo complete
 ```
 
 ### Benchmarks
 
-Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledged only after its transaction is durable. The pass marks in `npm run benchmark` are set for this machine, so another machine may report a miss.
+Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledged only after its transaction is durable.
 
 | Metric | Measured |
 |---|---:|
@@ -202,8 +206,9 @@ Apple M5 Pro, 24 GB, Node 24.21.0. Each write is a separate request, acknowledge
 | 1,000 concurrent waiting polls | 170.49 MB RSS |
 | Durable writes | 2,394 events/s |
 | Dispatch p99 | 1.82 ms |
+| Held-back heartbeat p99 with 5,000 queued | 1.66 ms |
 | Startup at 1.1 million facts | 99.8 ms |
-| Kernel lines (with comments and blanks) | 1,651 |
+| Kernel lines (with comments and blanks) | about 1,650 |
 | Runtime dependencies | 0 |
 
 As history grows, the status summary slows down and the log and indexes keep using disk. The first start after a format change rebuilds from the log, which took 43.1 seconds for 1.1 million facts. [Full numbers and method](docs/protocol.md#历史增长实测) (in Chinese).
@@ -230,7 +235,7 @@ For automated workloads, providers generally recommend using API keys rather tha
 | Location | Contents |
 |---|---|
 | `kernel/` | Decisions, fact log, projections, deadlines, rule matching, endpoint behavior, and card forms |
-| `host/` | Node HTTP, files and SQLite connections, clock, configuration, background services, and plugin loading |
+| `host/` | Node HTTP, files and SQLite connections, clock, configuration, status summary, background services, and plugin loading |
 | `protocol/` | Wire formats, JSON Schema, input validation, HTTP client, and conformance checks |
 | `worker/` | Claim work, run agents, handle heartbeats and cancellation, read and submit receipts |
 | `cli/`, `bin/` | User commands and entry point: status, answers, `why`, MCP, updates, and uninstall |

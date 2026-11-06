@@ -13,7 +13,7 @@ const rules = JSON.parse(readFileSync(process.env.AGENT_AUTOLOOP_RULES!, "utf8")
 rules.rules = rules.rules.filter(({ when }: { when: object }) => "source" in when);
 process.env.AGENT_AUTOLOOP_RULES = join(home, "rules.json");
 writeFileSync(process.env.AGENT_AUTOLOOP_RULES, JSON.stringify(rules));
-const hub = await import("../host/runtime.ts");
+const hub = await import("./hub.ts");
 const { serve } = await import("../host/http.ts");
 const keys = {
   source: hub.addKey("source", "app"),

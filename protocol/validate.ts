@@ -3,9 +3,15 @@
 import { InputError } from "../kernel/errors.ts";
 
 export const EVENT_TYPE = /^[a-z][a-z0-9_.-]{0,63}$/;
+/** What the protocol allows a card answer to carry: the schema says so, and the hub keeps it. */
+export const ANSWER_TEXT = 4000;
+export const ANSWER_BY = 500;
+export const ANSWER_REF = 500;
+/** A channel's own reference to the message it sent. */
+export const DELIVERY_REF = 500;
 export type Later = { key: string; at?: string; about?: string; cancel?: boolean };
 export type Ask = { title: string; text: string; options: string[]; recommend?: number; about?: string; key?: string };
-export type Notice = { title: string; text: string; key?: string };
+export type Notice = { title: string; text: string; key?: string; fyi?: boolean };
 export type Usage = { input?: number; output?: number; cached?: number; cost?: number };
 
 /** Missing figures stay missing: zero is a price or token count that was actually reported. */
@@ -67,6 +73,8 @@ export function parseEvent(input: unknown): EventInput {
     link: field("link"),
     hops: hops as number,
   };
+  // Half a Unicode character is stored and looked up as different bytes, so the same id would never be recognised again.
+  if (!event.id.isWellFormed()) throw new InputError("id 里有不完整的字符");
   if (!EVENT_TYPE.test(event.type)) throw new InputError("type 只能用小写字母、数字和 . _ -，以字母开头");
   // The subject and link go into the Agent's prompt, so neither may carry words: a subject is an identifier, a link a
   // web address in plain ASCII (anything else percent-encoded).
@@ -117,10 +125,11 @@ const validAsk = (ask: Item) =>
       (ask.recommend as number) < ask.options.length));
 
 const validNotice = (notice: Item) =>
-  only(notice, ["title", "text", "key"]) &&
+  only(notice, ["title", "text", "key", "fyi"]) &&
   text(notice.title, 200) &&
   text(notice.text, 4000) &&
-  optional(notice.key, 100);
+  optional(notice.key, 100) &&
+  (notice.fyi === undefined || typeof notice.fyi === "boolean");
 
 const validResolve = (item: Item) =>
   only(item, ["card", "reason"]) &&

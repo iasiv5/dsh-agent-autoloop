@@ -21,9 +21,8 @@ export const workers = (view: View) =>
 
 /** What a worker's agents have on: runs in hand and runs ready to be claimed. */
 export function waitingOn(view: View, worker: string, now: number) {
-  const ready = (run: Row) => run.state === "queued" && Date.parse(run.not_before) <= now;
   return rows(view, "runs", { state: ["queued", "claimed"] }).filter(
-    (run) => workerOf(view, run) === worker && (run.state === "claimed" || ready(run)),
+    (run) => workerOf(view, run) === worker && (run.state === "claimed" || Date.parse(run.not_before) <= now),
   );
 }
 
@@ -41,8 +40,9 @@ export function sourceOf(view: View, runId: number) {
 export function openInScope(view: View, run: Row) {
   const source = sourceOf(view, run.id);
   if (!source || !run.claimed_at) return [];
-  const inScope = (card: Row) => card.grp === run.grp && card.source === source && card.created_at <= run.claimed_at;
-  return rows(view, "cards", { state: "open", grp: run.grp, source }).filter(inScope);
+  return rows(view, "cards", { state: "open", grp: run.grp, source }).filter(
+    (card) => card.created_at <= run.claimed_at,
+  );
 }
 
 export function cardView(card: Row, env: Environment, ref: string | null = null, links = false) {
@@ -100,7 +100,7 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
       answers: answers.map(({ id: card, title, options, choice, answer: text, about, by, decided_at: at }) => {
         return { card, title, options: JSON.parse(options), choice, text, about, by, at };
       }),
-      timers: timers.filter((timer) => eventIds.includes(timer.event_id)).map(timerView),
+      timers: timers.map(timerView),
       waiting: waiting.sort((a, b) => a.at.localeCompare(b.at)).map(timerView),
       open: openInScope(view, run).map(({ id, title, text, created_at }) => ({
         card: id,
@@ -118,9 +118,8 @@ export function jobOf(view: View, run: Row, env: Environment): Job {
 }
 
 export function cancels(view: View, worker: string): number[] {
-  const stopping = (run: Row) => run.state === "claimed" && run.cancel_at !== null && workerOf(view, run) === worker;
   return rows(view, "runs", { state: "claimed" })
-    .filter(stopping)
+    .filter((run) => run.cancel_at !== null && workerOf(view, run) === worker)
     .map((run) => run.id);
 }
 

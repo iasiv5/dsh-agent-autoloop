@@ -9,7 +9,7 @@ import { rows, snapshot } from "../kernel/evolve.ts";
 import { after, test } from "node:test";
 import { setup } from "./helpers.ts";
 setup("stream");
-const hub = await import("../host/runtime.ts");
+const hub = await import("./hub.ts");
 const { makeHandler } = await import("../host/server.ts");
 const runtime = makeHandler("test");
 after(runtime.close);

@@ -27,12 +27,19 @@ export function question(issue: { number: number; title: string; body?: string; 
   };
 }
 
+/** The hub reads a receipt up to the first three backticks, even inside a string, so what people wrote can't spell them. */
+export const receiptBlock = (receipt: object) =>
+  `\`\`\`agent-autoloop\n${JSON.stringify(receipt).replaceAll("`", "\\u0060")}\n\`\`\``;
+
 export function deliveryReceipt(number: number, result: Delivered, attended: boolean) {
   if (!result.findings?.length) return result.summary;
   const text = result.findings.map((finding) => `${finding.title}：${finding.text}`).join("\n");
-  if (attended) return `${result.summary}\n${text}`;
-  const notice = { key: `review-${number}`, title: "交付前需要修复问题", text: [...text].slice(0, 1500).join("") };
-  return `${result.summary}\n\`\`\`agent-autoloop\n${JSON.stringify({ notice: [notice] })}\n\`\`\``;
+  // Left as written, a finding could hold a receipt block of its own, and the hub would act on it.
+  if (attended) return `${result.summary}\n${text.replaceAll("```", "'''")}`;
+  // An open card with the same key takes the new one in, so findings on a new commit need a key of their own.
+  const key = `review-${number}-${result.head?.slice(0, 12)}`;
+  const notice = { key, title: "交付前需要修复问题", text: [...text].slice(0, 1500).join("") };
+  return `${result.summary}\n${receiptBlock({ notice: [notice] })}`;
 }
 
 export function pendingEvents(

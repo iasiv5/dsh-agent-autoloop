@@ -22,9 +22,13 @@
 
 支持 macOS 和 Linux。运行前需要装好 Node 24、Git、curl，以及任意一个你已经登录好的命令行 Agent，不需要 GitHub 账号。也可以直接把[安装说明](INSTALL.md)丢给你的 Agent，让它替你装好。
 
+> **Windows 版：待定。** 很多朋友在问 Windows 版，我都看到了。我现在人在外面出差，手边没有 Windows 电脑，没法真机开发和测试，所以现在还不能在 Windows 上用。这个周末（11 月 7、8 日）回家后，我会把它开发完，做完兼容性测试，再正式推出。进度会更新在 [#17](https://github.com/KKKKhazix/agent-autoloop/issues/17)。等不及的话可以先用 WSL2，注意事项见 [INSTALL](INSTALL.md)。
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/KKKKhazix/agent-autoloop/main/install.sh | sh
 ```
+
+安装和 `agent-autoloop update` 都装最新的 [Release](https://github.com/KKKKhazix/agent-autoloop/releases)，那是通过了全部检查的版本。
 
 装好后用你本机的 Agent 真实走一遍“提问 → 退出等回复 → 拍板 → 接着干完”：
 
@@ -90,7 +94,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 }
 ```
 
-保存后几秒内自动生效，可以运行 `agent-autoloop check` 检查。就算改错了，系统也会继续按旧规则跑，并发卡片提醒你哪里写错了。
+保存后几秒内自动生效，可以运行 `agent-autoloop check` 检查；`agent-autoloop rules explain` 看生效的规则和下次定时，`agent-autoloop emit <类型> --dry-run` 预演一条事件会派给谁（不连接中台、不写日志）。就算改错了，或者文件被删、读不到，系统也会继续按旧规则跑，并发卡片提醒你。
 
 ### Agent 怎么跟中台配合？
 
@@ -111,7 +115,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 ```
 ````
 
-除了提问（`ask`），还能发通知（`notice`）、关闭已解决的卡片（`resolve`）、预约复查（`later`）和触发新事件（`events`）。万一 JSON 写错了，中台只让它在原会话里重写最后这段回复，不会把已经干完的业务重做一遍；重写也失败时，保留原结论并通知你回执没有生效。
+除了提问（`ask`），还能发通知（`notice`）、关闭已解决的卡片（`resolve`）、预约复查（`later`）和触发新事件（`events`）。通告不需要回答，但结案时可以顺手写一句处理说明，这句话会留在卡片上；只是告诉一声的通告标成 `fyi`，不带按钮。万一 JSON 写错了，中台只让它在原会话里重写最后这段回复，不会把已经干完的业务重做一遍；重写也失败时，保留原结论并通知你回执没有生效（通用命令没有会话，直接走这一步）。接着旧会话跑也一样：会话接不上才开新的；接上了、干到一半断了，就算没跑成，过几分钟回到原会话重试，不开新会话重做。同一事项的新事件默认开新会话；规则写 `"resume": true` 就接着上一轮的会话。
 
 ## 拿来即用的场景模板
 
@@ -139,21 +143,21 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 | 方向 | 内置 | 配置 |
 |---|---|---|
-| **事件**：怎么发现新活 | [GitHub Webhook](plugins/github/source.ts)、[HTTP 接口](docs/protocol.md#来源把世界变成事件)、[定时规则](skills/agent-autoloop/SKILL.md#改规则)、[Issue 轮询脚本](examples/watch-github-issues.sh) | [说明](skills/agent-autoloop/SKILL.md#接一个事件插件) |
-| **Agent**：谁来干活 | [Claude Code](plugins/claude/agent.ts)、[Codex](plugins/codex/agent.ts)、[ACP](plugins/acp/agent.ts)、[通用命令](plugins/command/agent.ts) | [说明](skills/agent-autoloop/SKILL.md#接一个-agent) |
+| **事件**：怎么发现新活 | [GitHub Webhook](plugins/github/source.ts)、[GitLab Webhook](plugins/gitlab/source.ts)、[HTTP 接口](docs/protocol.md#来源把世界变成事件)、[定时规则](skills/agent-autoloop/SKILL.md#改规则)、[Issue 轮询脚本](examples/watch-github-issues.sh) | [说明](skills/agent-autoloop/SKILL.md#接一个事件插件) |
+| **Agent**：谁来干活 | [Claude Code](plugins/claude/agent.ts)、[Codex](plugins/codex/agent.ts)、[ACP](plugins/acp/agent.ts)、[DeepSeek Harness](plugins/dsh/agent.ts)、[通用命令](plugins/command/agent.ts) | [说明](skills/agent-autoloop/SKILL.md#接一个-agent) |
 | **通道**：去哪找你拍板 | [桌面通知](plugins/desktop/channel.ts)（默认开启）、[飞书](plugins/feishu/channel.ts)、[钉钉 / 企微 / Slack / Discord](plugins/webhook/templates.ts) | [说明](skills/agent-autoloop/SKILL.md#接一个通道) |
 | **交付**：把 CI/CD 也做成插件 | [`delivery`](plugins/delivery/delivery.ts) | [说明](skills/agent-autoloop/SKILL.md#交付流水线) |
 
-**实测情况：** Claude Code、Codex 和 ACP（官方 Codex ACP 适配器）跑通了多轮问答和跨进程会话续接；飞书跑通了发送、按钮回调和卡片更新；四种 Webhook 模板只在本地模拟服务上验证过。这些文字通道靠回答链接拍板，要把 `hub.publicUrl` 配成手机或电脑能打开的地址。
+**实测情况：** Claude Code、Codex 和 ACP（官方 Codex ACP 适配器）跑通了多轮问答和跨进程会话续接；飞书跑通了发送、按钮回调和卡片更新；四种 Webhook 模板只在本地模拟服务上验证过，GitLab Webhook 按官方文档的格式测试，没连过真实 GitLab。这些文字通道靠回答链接拍板，要把 `hub.publicUrl` 配成手机或电脑能打开的地址。
 
 **其他命令行 Agent 一行接入。** 设置 `use: "command"` 并传入命令数组，`{prompt}` 作为独立参数传递，不会被当成 shell 代码执行。下面的命令整理自各家官方文档，我们还没有逐个跑过：
 
 | Agent | 接入命令 |
 |---|---|
-| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cli-help.md#dsh-headless) | `dsh --profile headless {prompt}` |
+| [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cli-help.md#dsh-headless) 旧版（内置插件要 0.2.2 或更新） | `dsh --profile headless {prompt}` |
 | [pi](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/cli.md) | `pi --print {prompt}` |
 | [OpenClaw](https://docs.openclaw.ai/cli/agent) | `openclaw agent exec {prompt}` |
-| [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | `hermes chat -q {prompt}` |
+| [Hermes](https://hermes-agent.nousresearch.com/docs/user-guide/cli) | `hermes chat -Q -q {prompt}` |
 | [Cursor](https://cursor.com/docs/cli/reference/parameters) | `agent -p --trust {prompt}` |
 | [WorkBuddy / CodeBuddy](https://www.codebuddy.ai/docs/cli/headless) | `codebuddy -p {prompt}` |
 
@@ -191,7 +195,7 @@ Agent 结束了这一轮，问了你一个问题。它现在不占进程、不�
 
 ### 实测性能
 
-Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应答。`npm run benchmark` 的达标线按这台机器定，换台机器可能报未达标。
+Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应答。
 
 | 指标 | 实测 |
 |---|---:|
@@ -200,8 +204,9 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 | 1000 个同时等待的长轮询 | 170.49 MB RSS |
 | 持久化写入 | 2394 条/秒 |
 | 派活 p99 | 1.82 ms |
+| 排队 5000 时被挡下的心跳 p99 | 1.66 ms |
 | 110 万条事实时的启动 | 99.8 ms |
-| 内核行数（含空行和注释） | 1651 |
+| 内核行数（含空行和注释） | 约 1650 |
 | 运行时依赖 | 0 |
 
 历史变大后，状态汇总会变慢，日志和索引也继续占磁盘；格式变化后的首次启动要从日志全量重建，110 万条用时 43.1 秒。[完整数据和测法](docs/protocol.md#历史增长实测)。
@@ -229,7 +234,7 @@ Apple M5 Pro、24 GB、Node 24.21.0。写入逐条提交，事务落盘后才应
 | 位置 | 放什么 |
 |---|---|
 | `kernel/` | 内核：决策、事实日志、状态投影、到期任务、规则匹配、接口行为与卡片表单 |
-| `host/` | 运行外壳：Node HTTP、文件与 SQLite 连接、时钟、配置、后台服务和插件加载 |
+| `host/` | 运行外壳：Node HTTP、文件与 SQLite 连接、时钟、配置、状态汇总、后台服务和插件加载 |
 | `protocol/` | 通信格式、JSON Schema、输入校验、HTTP 客户端和一致性检查 |
 | `worker/` | 接单程序：领活、运行 Agent、心跳与停止、读取和提交回执 |
 | `cli/`、`bin/` | 用户命令及启动入口，包括状态、回答、`why`、MCP、更新与卸载 |

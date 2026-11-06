@@ -1,7 +1,7 @@
 // Keeping it running: launchd on a Mac, systemd on Linux. Both start it at login and restart it if it stops.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "./home.ts";
@@ -16,11 +16,38 @@ const plistFile = () => path.join(homedir(), "Library/LaunchAgents", `${label()}
 const unitFile = () => path.join(homedir(), ".config/systemd/user", `${label()}.service`);
 const xml = (text: string) => text.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 
+export type UnitOptions = {
+  home: string;
+  executable: string;
+  program: string;
+};
+
+const systemdItem = (text: string, escapeDollar = false) => {
+  if (/[\u0000-\u001f\u007f]/u.test(text)) throw new Error("systemd unit 的值不能包含控制字符");
+  let escaped = text.replaceAll("\\", "\\\\").replaceAll('"', '\\"').replaceAll("%", "%%");
+  if (escapeDollar) escaped = escaped.replaceAll("$", () => "$$");
+  return `"${escaped}"`;
+};
+
+/** Homebrew keeps a version's files under `Cellar`, and deletes that directory at the next upgrade; `opt` beside it
+ *  is the link that follows. A program named by its Cellar path dies the next time the machine is upgraded. */
+function stablePath(executable: string) {
+  const cellar = /^(\/opt\/homebrew|\/usr\/local)\/Cellar\/([^/]+)\/[^/]+\/bin\/([^/]+)$/.exec(executable);
+  if (!cellar) return executable;
+  const opt = `${cellar[1]}/opt/${cellar[2]}/bin/${cellar[3]}`;
+  try {
+    return realpathSync(opt) === executable ? opt : executable;
+  } catch {
+    return executable;
+  }
+}
+
 export function plist() {
   const logs = path.join(HOME, "logs");
   const systemPaths = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"];
-  const searchPath = [path.dirname(process.execPath), ...systemPaths].join(":");
-  const program = [process.execPath, "--disable-warning=ExperimentalWarning", PROGRAM, "up"];
+  const executable = stablePath(process.execPath);
+  const searchPath = [path.dirname(executable), ...systemPaths].join(":");
+  const program = [executable, "--disable-warning=ExperimentalWarning", PROGRAM, "up"];
   const programArguments = program.map((part) => `<string>${xml(part)}</string>`).join("");
   const homeEntry = `<key>AGENT_AUTOLOOP_HOME</key><string>${xml(HOME)}</string>`;
   const pathEntry = `<key>PATH</key><string>${xml(searchPath)}</string>`;
@@ -39,13 +66,17 @@ export function plist() {
 `;
 }
 
-export function unit() {
+export function unit(options: UnitOptions = { home: HOME, executable: process.execPath, program: PROGRAM }) {
+  const environment = systemdItem(`AGENT_AUTOLOOP_HOME=${options.home}`);
+  const command = [options.executable, "--disable-warning=ExperimentalWarning", options.program, "up"]
+    .map((part) => systemdItem(part, true))
+    .join(" ");
   return `[Unit]
 Description=Agent 自动化中台
 
 [Service]
-Environment=AGENT_AUTOLOOP_HOME=${HOME}
-ExecStart=${process.execPath} --disable-warning=ExperimentalWarning ${PROGRAM} up
+Environment=${environment}
+ExecStart=${command}
 Restart=always
 RestartSec=10
 
@@ -79,7 +110,13 @@ export function installService() {
 
 export function removeService() {
   const file = process.platform === "darwin" ? plistFile() : unitFile();
-  if (!existsSync(file) || !readFileSync(file, "utf8").includes(xml(PROGRAM))) return;
+  if (!existsSync(file)) return;
+  const service = readFileSync(file, "utf8");
+  const ownsService =
+    process.platform === "darwin"
+      ? service.includes(xml(PROGRAM))
+      : service.includes(systemdItem(PROGRAM, true)) || service.includes(PROGRAM);
+  if (!ownsService) return;
   if (process.platform === "darwin") {
     spawnSync("launchctl", ["bootout", `${domain()}/${label()}`], { stdio: "ignore" });
     rmSync(plistFile(), { force: true });
@@ -114,7 +151,21 @@ export function stopUp() {
   for (let tries = 0; tries < 50 && runningUp() !== null; tries++) pause(100);
 }
 
+/** The service this program installs and can restart. */
 export function serviceRunning() {
   if (process.platform === "darwin") return existsSync(plistFile()) && launchdHasIt();
   return spawnSync("systemctl", ["--user", "is-active", "--quiet", label()], { stdio: "ignore" }).status === 0;
+}
+
+/** The name of a system-level unit running this, as a server run by root might have. It's its owner's to restart. */
+export function systemUnit() {
+  if (process.platform === "darwin") return null;
+  return spawnSync("systemctl", ["is-active", "--quiet", label()], { stdio: "ignore" }).status === 0 ? label() : null;
+}
+
+/** New code counts once what's running starts again. What can't be restarted from here is said back, for the owner. */
+export function restartService() {
+  if (serviceRunning()) return void installService();
+  const name = systemUnit();
+  return name ? `这台电脑用的是系统级服务，运行 systemctl restart ${name} 才会用上新版。` : undefined;
 }

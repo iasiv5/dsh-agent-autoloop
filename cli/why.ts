@@ -54,7 +54,7 @@ export function formatWhy(id: number, facts: Fact[]) {
 
   function tellCard(row: Row, before: Row | undefined, receipt: boolean) {
     const own = row.run_id === id;
-    if (!before && own && !row.fyi) {
+    if (!before && own && (!row.fyi || row.key.startsWith("thread:"))) {
       const options = JSON.parse(row.options) as string[];
       add(row.created_at, `${row.kind === "ask" ? "提问" : "通知"}：${row.title}`);
       if (row.text)

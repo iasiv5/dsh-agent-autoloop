@@ -1,6 +1,7 @@
 // `agent-autoloop mcp`: the hub's doors as MCP tools over stdio, using the keys already in this machine's config.json.
-import { createInterface } from "node:readline";
 import { readConfig } from "../host/config.ts";
+import { eachLine } from "../host/lines.ts";
+import { versionName } from "../host/version.ts";
 import { hubClient, type Hub } from "../protocol/client.ts";
 
 const positive = { type: "integer", minimum: 1 };
@@ -77,8 +78,6 @@ function callTool(hub: Hub, name: Tool["name"], args: any) {
 export async function mcp() {
   const config = readConfig();
   const tools = toolsFor(config);
-  let initialized = false;
-  let ready = false;
   const reply = (id: unknown, body: object) => console.log(JSON.stringify({ jsonrpc: "2.0", id, ...body }));
   const refuse = (id: unknown, code: number, message: string) => reply(id, { error: { code, message } });
 
@@ -95,33 +94,25 @@ export async function mcp() {
     }
   }
 
-  for await (const line of createInterface({ input: process.stdin })) {
+  eachLine(process.stdin, (line) => {
     let request: any;
     try {
       request = JSON.parse(line);
     } catch {
-      refuse(null, -32700, "不是 JSON");
-      continue;
+      return refuse(null, -32700, "不是 JSON");
     }
     if (!request || request.jsonrpc !== "2.0" || typeof request.method !== "string") {
-      refuse(request?.id ?? null, -32600, "请求格式不正确");
-      continue;
+      return refuse(request?.id ?? null, -32600, "请求格式不正确");
     }
     const { id, method, params } = request;
-    if (id === undefined) {
-      if (method === "notifications/initialized" && initialized) ready = true;
-    } else if (method === "initialize") {
-      if (!params?.protocolVersion || !params?.capabilities || !params?.clientInfo) {
-        refuse(id, -32602, "缺少初始化参数");
-        continue;
-      }
-      initialized = true;
-      const serverInfo = { name: "agent-autoloop", version: "1.0.0" };
+    if (id === undefined) return;
+    if (method === "initialize") {
+      const serverInfo = { name: "agent-autoloop", version: versionName() };
       reply(id, { result: { protocolVersion: "2025-11-25", capabilities: { tools: {} }, serverInfo } });
     } else if (method === "ping") reply(id, { result: {} });
-    else if (!ready) refuse(id, -32600, "先完成 initialize");
     else if (method === "tools/list") reply(id, { result: { tools } });
-    else if (method === "tools/call") await answerCall(id, params);
+    // Each answers by itself, however long it takes: a client's ping has to get through meanwhile.
+    else if (method === "tools/call") void answerCall(id, params);
     else refuse(id, -32601, "没有这个方法");
-  }
+  });
 }

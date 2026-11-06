@@ -1,17 +1,20 @@
 #!/bin/sh
-# Says how much CI a change needs, as scope=docs, normal or full. The slow simulations only cover kernel/, protocol/
-# and sim/, so other code skips them on a PR, and text no test reads skips everything. A file this doesn't name, or
-# a diff it can't get, means full; so does anything but pure text once it reaches main, in case a PR skipped too much.
+# Says how much CI a run needs, as scope=docs, normal, kernel or full. Text no test reads skips everything, and everything
+# else gets the quick tests. The simulation only imports kernel/ and protocol/, so those and its own parts add a short one:
+# breaking each kernel condition in turn showed the quick tests already catch what the long runs do. The long runs come with
+# nightly and before a release; a pull request only gets them for the two files nothing else would run, or a diff it can't
+# get. What reaches main gets the quick tests, text too: a commit whose run a newer push replaced is checked by the next one,
+# whatever that is.
 set -u
 
-case "${GITHUB_EVENT_NAME:-}" in
-  pull_request) from=HEAD^1 ;;
-  push) from=${BEFORE:-} ;;
-  *) from="" ;;
-esac
+if [ "${GITHUB_EVENT_NAME:-}" = push ]; then
+  echo "scope=normal"
+  exit 0
+fi
 
 # Without --no-renames, moving a file out of kernel/ would show only where it landed.
-if [ -z "$from" ] || ! files=$(git diff --no-renames --name-only "$from" HEAD 2>/dev/null) || [ -z "$files" ]; then
+if [ "${GITHUB_EVENT_NAME:-}" != pull_request ] ||
+  ! files=$(git diff --no-renames --name-only HEAD^1 HEAD 2>/dev/null) || [ -z "$files" ]; then
   echo "scope=full"
   exit 0
 fi
@@ -23,17 +26,19 @@ while IFS= read -r file; do
     docs/plugins.md) kind=normal ;;
     README.md | README.en.md | INSTALL.md | SECURITY.md | CONTRIBUTING.md | AGENTS.md | LICENSE) kind=docs ;;
     docs/* | .github/ISSUE_TEMPLATE/* | .github/pull_request_template.md) kind=docs ;;
-    tests/simulation.test.ts) kind=full ;;
-    plugins/* | examples/* | skills/* | worker/* | host/* | cli/* | bin/* | scripts/* | tests/* | dsh/* | install.sh) kind=normal ;;
-    *) kind=full ;;
+    tests/simulation.test.ts | sim/enumerate.ts) kind=full ;;
+    kernel/* | protocol/* | sim/random.ts | sim/world.ts | sim/invariants.ts) kind=kernel ;;
+    # The DSH-native plugin package is ordinary code: quick tests, no simulation.
+    dsh/*) kind=normal ;;
+    *) kind=normal ;;
   esac
   case "$kind" in
     full) scope=full ;;
-    normal) [ "$scope" = full ] || scope=normal ;;
+    kernel) [ "$scope" = full ] || scope=kernel ;;
+    normal) [ "$scope" = docs ] && scope=normal ;;
   esac
 done <<END
 $files
 END
 
-if [ "$scope" = normal ] && [ "$GITHUB_EVENT_NAME" = push ]; then scope=full; fi
 echo "scope=$scope"

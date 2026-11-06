@@ -23,7 +23,19 @@ export type Turn = {
   contextFile: string;
   folder: string;
 };
-export type Reading = { text?: string; session?: string; usage?: Usage; error?: string; finished?: boolean };
+export type Reading = {
+  text?: string;
+  session?: string;
+  /** What this launch used. */
+  usage?: Usage;
+  /** What the session has used so far, for amounts the program only gives that way. */
+  sessionUsage?: Usage;
+  error?: string;
+  /** Its turn is over, though it may not have exited. */
+  finished?: boolean;
+  /** It has this turn's prompt, in a conversation that's there. From here on the work may be half done. */
+  started?: boolean;
+};
 export type Adapter = {
   /** Its command line for this turn. */
   command(turn: Turn): string[];

@@ -1,6 +1,5 @@
 {
   "name": "agent-autoloop",
-  "version": "1.0.0",
   "description": "Let Agents follow up on work and ask when they need your judgment.",
   "license": "MIT",
   "repository": {
@@ -17,12 +16,14 @@
   },
   "scripts": {
     "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.ts",
-    "test:quick": "node --disable-warning=ExperimentalWarning --test $(ls tests/*.test.ts | grep -v /simulation.test.ts)",
+    "test:quick": "node --disable-warning=ExperimentalWarning --test \"tests/!(simulation).test.ts\"",
     "typecheck": "tsc -p .",
     "format": "prettier --write \"**/*.{ts,json,yml}\"",
     "format:check": "prettier --check \"**/*.{ts,json,yml}\"",
-    "test:nightly": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 sim/*.test.ts && node --disable-warning=ExperimentalWarning scripts/benchmark.ts --check",
-    "benchmark": "node --disable-warning=ExperimentalWarning scripts/benchmark.ts --check"
+    "test:sim": "node --disable-warning=ExperimentalWarning sim/random.ts 24301 20000",
+    "test:deep": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 sim/*.test.ts",
+    "test:nightly": "npm run test:deep && node --disable-warning=ExperimentalWarning scripts/benchmark.ts",
+    "benchmark": "node --disable-warning=ExperimentalWarning scripts/benchmark.ts"
   },
   "devDependencies": {
     "@types/node": "26.6.4",

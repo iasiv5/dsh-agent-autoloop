@@ -2,7 +2,8 @@
 // `agent-autoloop add` has put it elsewhere; add leaves the entry where the loader doesn't look; hello-agent's read throws on
 // output it doesn't expect (a throw stops the worker) or loses the session; hello-channel writes a card but never reports
 // it, so the hub sends it again every minute; hello-source takes a wrong or missing signature, or gives an event the hub
-// refuses; an example drifts from the engine's types; a command in the tutorial doesn't run as written.
+// refuses; an example drifts from the engine's types; a command in the tutorial doesn't run as written; add takes a
+// repository whose name can't be a plugin name without saying which name it worked out and turned down.
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHmac } from "node:crypto";
@@ -161,8 +162,8 @@ test("hello-source: only what's signed with the secret gets through", () => {
 });
 
 /** A repository of its own, the way someone publishes a plugin: the entry file at its root. */
-function repository(name: string, file: string) {
-  const dir = join(scratch, "repos", name);
+function repository(name: string, file: string, folder = name) {
+  const dir = join(scratch, "repos", folder);
   mkdirSync(dir, { recursive: true });
   cpSync(join(ROOT, "examples", "plugins", name, file), join(dir, file));
   const git = (...args: string[]) => {
@@ -174,6 +175,22 @@ function repository(name: string, file: string) {
   git("-c", "user.name=test", "-c", "user.email=test@example.com", "commit", "-qm", "first");
   return dir;
 }
+
+test("the folder a repository installs into is the plugin name, in lower case, and a name no plugin can have is refused by it", () => {
+  const refusedHome = mkdtempSync(join(scratch, "home-"));
+  const refused = agentAutoloop(["add", repository("hello-agent", "agent.ts", "hello_agent")], refusedHome);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr, /hello_agent/, "it says which plugin name it worked out and turned down");
+  assert.ok(!existsSync(join(refusedHome, "plugins", "hello_agent")), "nothing lands where the loader can't use it");
+
+  const casedHome = mkdtempSync(join(scratch, "home-"));
+  const added = agentAutoloop(["add", repository("hello-agent", "agent.ts", "Hello-Plugin")], casedHome);
+  assert.equal(added.status, 0, added.stderr);
+  assert.ok(
+    existsSync(join(casedHome, "plugins", "hello-plugin", "agent.ts")),
+    "the folder is the lowercased repository name, which is what rules and config say `use`",
+  );
+});
 
 test("agent-autoloop add from a git repository, then all three run through a real hub", async () => {
   const home = mkdtempSync(join(scratch, "home-"));

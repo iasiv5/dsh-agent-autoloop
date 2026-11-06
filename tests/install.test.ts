@@ -5,6 +5,7 @@
 // step says `try` when nothing has been started; it asks for sudo; the Node advice can't be followed as written, leaving out
 // that Homebrew's node@24 isn't on PATH; running it again redoes the setup, or installs a service after --no-service.
 // A normal umask or a pre-existing directory must not expose the database, event text or worker output to other users.
+// A computer that only takes work can't join, because the installer has set a hub up on it first.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import {
@@ -51,12 +52,14 @@ function computer({ node = "real" }: { node?: "real" | "old" | "none" } = {}) {
   const person = join(dir, `person-${++people}`);
   const tools = join(person, "tools");
   mkdirSync(tools, { recursive: true });
-  for (const name of ["mkdir", "ln", "cat", "cp", "chmod"]) symlinkSync(system(name), join(tools, name));
+  for (const name of ["mkdir", "ln", "cat", "cp", "chmod", "sed", "sort", "tail"])
+    symlinkSync(system(name), join(tools, name));
   const called = join(person, "called");
   executable(
     join(tools, "git"),
     `echo "git $*" >> "${called}"
-if [ "$1" = clone ]; then for target; do :; done; cp -R "${copy}" "$target"; mkdir "$target/.git"; fi`,
+case " $* " in *" clone "*) for target; do :; done; cp -R "${copy}" "$target"; mkdir "$target/.git" ;; esac
+[ "$3" != config ] || echo https://github.com/KKKKhazix/agent-autoloop.git`,
   );
   // `launchctl print` failing says nothing's loaded, which is what lets a first load go ahead at once.
   executable(join(tools, "launchctl"), `echo "launchctl $*" >> "${called}"\n[ "$1" != print ]`);
@@ -92,6 +95,23 @@ test("installation keeps data private even when its root already exists with mod
   const done = it.run([it.local]);
   assert.equal(done.status, 0, done.stderr + done.stdout);
   assert.equal(statSync(it.hub).mode & 0o777, 0o700);
+});
+
+test("a computer that only takes work joins through the installer, with nothing of a hub set up on it", () => {
+  const it = computer();
+  const done = it.run([it.local], ["join", "https://hub.test", "--worker", "mac", "--key", "k", "--no-service"]);
+  assert.equal(done.status, 0, done.stderr + done.stdout);
+  assert.deepEqual(JSON.parse(readFileSync(join(it.hub, "config.json"), "utf8")), {
+    url: "https://hub.test",
+    worker: { name: "mac", key: "k" },
+  });
+  assert.match(done.stdout, /接活/);
+  assert.equal(readlinkSync(join(it.local, "agent-autoloop")), it.program);
+  // A second try, with the key corrected, must say it did nothing rather than that it updated.
+  const again = it.run([it.local], ["join", "https://hub.test", "--worker", "mac", "--key", "other", "--no-service"]);
+  assert.notEqual(again.status, 0);
+  assert.match(again.stderr, /已经配置过了/);
+  assert.equal(JSON.parse(readFileSync(join(it.hub, "config.json"), "utf8")).worker.key, "k");
 });
 
 test("the command goes in ~/.local/bin when that's on PATH, even behind another place it could go", () => {
@@ -204,7 +224,10 @@ test("running it again updates and doesn't set anything up over what's there", (
   assert.equal(readFileSync(join(it.hub, "rules.json"), "utf8"), "my rules");
   assert.equal(readFileSync(join(it.hub, "config.json"), "utf8"), config);
   assert.equal(readlinkSync(join(it.local, "agent-autoloop")), it.program);
+  // This stand-in lists no releases. What happens with some is in releases.test.ts, with the real git.
   assert.deepEqual(readFileSync(it.called, "utf8").trim().split("\n"), [
+    `git -C ${join(it.hub, "app")} config --get remote.origin.url`,
+    "git ls-remote --refs --tags https://github.com/KKKKhazix/agent-autoloop.git v*",
     `git -C ${join(it.hub, "app")} pull --ff-only --quiet`,
   ]);
 

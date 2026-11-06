@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 const mode = process.argv[2];
 if (["seed", "server", "rebuild"].includes(mode)) {
-  const hub = await import("../host/runtime.ts");
+  const hub = await import("../tests/hub.ts");
   const { db } = hub;
   if (mode === "seed") {
     const start = Number(process.argv[3]),
@@ -184,7 +184,8 @@ if (["seed", "server", "rebuild"].includes(mode)) {
         assert.ok(why.some((f: any) => f.type === "finish"));
       }
       probes += 30;
-      const status = await timed("status", "/v1/state", "owner");
+      let status: any;
+      for (let n = 0; n < 30; n++) status = await timed("status", "/v1/state", "owner");
       assert.equal(status.totals.queued, 0);
       assert.equal(status.totals.running, 0);
       assert.equal(status.totals.done, mark * 2 + probes);

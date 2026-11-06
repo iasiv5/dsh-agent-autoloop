@@ -3,14 +3,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { Conflict } from "./errors.ts";
 import { evolve, initialize, statement, View, type Fact } from "./evolve.ts";
 
-export function readLog(db: DatabaseSync, after = 0): Fact[] {
-  return [...iterateLog(db, after)];
-}
 export function* iterateLog(db: DatabaseSync, after = 0): Generator<Fact> {
   for (const row of db.prepare("SELECT fact FROM facts WHERE seq > ? ORDER BY seq").iterate(after))
     yield JSON.parse(String(row.fact));
 }
 function transaction(db: DatabaseSync, work: () => View): View {
+  if (db.isTransaction) return work();
   db.exec("BEGIN IMMEDIATE");
   try {
     const view = work();
@@ -40,5 +38,12 @@ export function commit(db: DatabaseSync, view: View, produce: () => Fact[]): Vie
     const insert = statement(db, "INSERT INTO facts(seq,fact) VALUES (?,?)");
     for (const fact of facts) insert.run(fact.seq, JSON.stringify(fact));
     return evolve(view, facts, db);
+  });
+}
+/** Reads the view holding the write lock: commands write to this database too, so one read before it can be stale. */
+export function commitLatest(db: DatabaseSync, format: string, produce: (view: View) => Fact[]): View {
+  return transaction(db, () => {
+    const view = openView(db, format);
+    return commit(db, view, () => produce(view));
   });
 }

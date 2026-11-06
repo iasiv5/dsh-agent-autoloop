@@ -1,6 +1,6 @@
 // `agent-autoloop uninstall`: takes away what the install put on this computer and nothing else. A link is ours only if it really
 // leads to this program: someone else's agent-autoloop, or a folder of their own by that name, stays where it is.
-import { existsSync, lstatSync, realpathSync, rmSync } from "node:fs";
+import { existsSync, lstatSync, realpathSync, rmSync, unlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import path from "node:path";
 import { HOME } from "../host/home.ts";
@@ -15,7 +15,8 @@ function removeLink(link: string, target: string) {
   } catch {
     return; // It leads nowhere, so not here.
   }
-  rmSync(link);
+  // Not rmSync: Node 25.1 refuses it for a link that leads to a folder.
+  unlinkSync(link);
   console.log(`删掉了 ${link}`);
 }
 

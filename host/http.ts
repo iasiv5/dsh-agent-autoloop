@@ -21,6 +21,8 @@ export function serve(port: number, host = "127.0.0.1", { commit = "dev" }: { co
         ...body,
       });
       const answer = await runtime.handle(request);
+      // The rest of an unread body would be taken for the next request on this connection.
+      if (!req.complete) res.setHeader("connection", "close");
       res.writeHead(answer.status, Object.fromEntries(answer.headers));
       if (!answer.body) return void res.end();
       Readable.fromWeb(answer.body as any)

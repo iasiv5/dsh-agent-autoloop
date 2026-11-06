@@ -31,6 +31,8 @@ class TooLarge extends Error {}
 
 async function readText(request: Request) {
   if (!request.body) return "";
+  // A little over the limit is read to its end: hanging up mid-upload can cost the client its 413.
+  if (Number(request.headers.get("content-length")) > 8 * MAX_BODY) throw new TooLarge();
   const reader = request.body.getReader();
   const chunks: Uint8Array[] = [];
   let size = 0;
@@ -100,10 +102,10 @@ async function cardAtLink(call: Call, linkToken: string) {
   const card = call.services.card(linkToken);
   const linksInUse = Object.values(rules.channels).some((channel) => channel.links);
   if (!card || !linksInUse) throw new NotFound("没有这张卡片");
-  if (request.method === "GET") return new Response(cardPage(cardView(card, environment)), { headers: PAGE_HEADERS });
   if (call.now - Date.parse(card.created_at) > LINK_LIFETIME) {
-    throw new AuthError(`这个链接过期了。在装它的电脑上运行 agent-autoloop answer ${card.id} 回答`);
+    throw new AuthError("这个链接过期了。在装它的电脑上运行 agent-autoloop status，还没答的卡片都在那里，可以接着回答");
   }
+  if (request.method === "GET") return new Response(cardPage(cardView(card, environment)), { headers: PAGE_HEADERS });
   const form = new URLSearchParams(await readText(request));
   const choice = form.has("choice") && { choice: Number(form.get("choice")) };
   act(call, "answer", card.id, { ...choice, text: form.get("text") ?? undefined, by: "链接" });
@@ -210,8 +212,18 @@ async function route(call: Call): Promise<Response> {
   const { method } = request;
   const path = call.url.pathname;
   if (method === "GET" && path === "/healthz") return json({ ok: true, commit: services.commit });
-  const key = /^\/v1\/keys\/(source|worker|channel|owner)\/([a-z][a-z0-9-]*)$/.exec(path);
-  if (method === "DELETE" && key) return ownerAct(call, "removeKey", key[1], key[2]);
+  // A key's name is whatever `key new` was given; it only has to stay one path segment when encoded.
+  const key = /^\/v1\/keys\/(source|worker|channel|owner)\/([^/]+)$/.exec(path);
+  if (method === "DELETE" && key) {
+    requireKey(call, "owner");
+    let name: string;
+    try {
+      name = decodeURIComponent(key[2]);
+    } catch {
+      throw new InputError("密钥名字不正确");
+    }
+    return json({ ok: true, changed: act(call, "removeKey", key[1], name) });
+  }
   const link = CARD_LINK.exec(path);
   if (link && ["GET", "POST"].includes(method)) return cardAtLink(call, link[1]);
   const hook = /^\/v1\/in\/([a-z][a-z0-9-]*)$/.exec(path);
