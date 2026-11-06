@@ -2,6 +2,13 @@
 
 先读 [docs/protocol.md](docs/protocol.md) 和 [架构图](docs/architecture.svg)：它们说明最终实现。
 
+## 分支约定
+
+- `main` 只用来同步上游（upstream）代码：只接收上游更新，不提交开发内容。
+- `dsh-agent-autoloop` 是开发分支：DSH 原生插件的代码、测试与文档都在这里提交。
+- 不在 `main` 上直接开发；不改写、不强推已推送的分支，除非用户明确要求。
+- 推送到 origin、开 PR、同步上游，先经用户确认。
+
 ## 原则
 
 - **内核只收、只分、只派、只记。** `kernel/` 不主动连接任何东西，不知道任何产品的名字。`tests/purity.test.ts` 守着这几条。新的产品、新的连接方式都是外面的插件。
